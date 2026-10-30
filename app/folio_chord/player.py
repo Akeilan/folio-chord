@@ -99,6 +99,7 @@ class _Pipe:
         self.eq.link(conv2)
         conv2.link(self.spec)
         f.add_pad(Gst.GhostPad.new("sink", first.get_static_pad("sink")))
+        self._probe = None
         f.add_pad(Gst.GhostPad.new("src", self.spec.get_static_pad("src")))
         self.pb.set_property("audio-filter", f)
         self.pb.connect("about-to-finish", self._about_to_finish)
@@ -107,6 +108,44 @@ class _Pipe:
         bus.connect("message", self._message)
         self.pending = None      # the next item set for gapless playback
         self.fade = 1.0
+
+    def scope_on(self, on):
+        """The waveform for Chordamp's oscilloscope (C3-35): a probe copies what passes the spectrum
+        element, mixed to mono, only while it's being shown."""
+        pad = self.spec.get_static_pad("src")
+        if on and self._probe is None:
+            self._probe = pad.add_probe(Gst.PadProbeType.BUFFER, self._scope_buffer)
+        elif not on and self._probe is not None:
+            pad.remove_probe(self._probe)
+            self._probe = None
+
+    def _scope_buffer(self, pad, info):
+        import array
+        try:
+            caps = pad.get_current_caps()
+            st = caps.get_structure(0) if caps else None
+            fmt = st.get_string("format") if st else None
+            ch = st.get_int("channels")[1] if st else 1
+            buf = info.get_buffer()
+            ok, mi = buf.map(Gst.MapFlags.READ)
+            if not ok:
+                return Gst.PadProbeReturn.OK
+            try:
+                data = bytes(mi.data)
+            finally:
+                buf.unmap(mi)
+            if fmt == "F32LE":
+                a = array.array("f")
+                a.frombytes(data[: len(data) // 4 * 4])
+                mono = [a[i] for i in range(0, len(a), max(1, ch))]
+                self.engine.scope = array.array("h", (int(max(-1.0, min(1.0, v)) * 32767) for v in mono[-512:]))
+            elif fmt == "S16LE":
+                a = array.array("h")
+                a.frombytes(data[: len(data) // 2 * 2])
+                self.engine.scope = array.array("h", a[::max(1, ch)][-512:])
+        except Exception:       # noqa: BLE001 — the picture is a nicety; never disturb the sound
+            pass
+        return Gst.PadProbeReturn.OK
 
     def set_item(self, item):
         self.item = item
@@ -137,7 +176,8 @@ class Engine:
         self.next_fn = None
         self.rate = 1.0
         self.balance = 0.0          # -1 left .. 1 right
-        self.auto_eq = True         # songs' own presets (Get Info) are used; Chordamp's AUTO
+        self.auto_eq = True
+        self.scope = None           # the latest waveform (int16, mono) while the oscilloscope is on         # songs' own presets (Get Info) are used; Chordamp's AUTO
         self.output = None          # a Gst.Device, or None for the desktop's choice (C3-24)
         self.preset_lookup = lambda name: PRESETS.get(name)     # per-song presets, the app's own too (C3-13, C3-25)
         self.a = _Pipe(self, "chord-a")
@@ -382,6 +422,12 @@ class Engine:
         self.volume = max(0.0, min(1.0, v))
         for p in (self.a, self.b):
             self._apply_volume(p)
+
+    def set_scope(self, on):
+        for p in (self.a, self.b):
+            p.scope_on(on)
+        if not on:
+            self.scope = None
 
     def set_balance(self, b):
         self.balance = max(-1.0, min(1.0, float(b)))
