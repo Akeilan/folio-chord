@@ -1,0 +1,82 @@
+New Playlist	new-playlist	ok
+New Playlist from Selection	new-playlist-selection	ok
+New Smart Playlist…	new-smart	ok
+New Playlist Folder	new-folder	ok
+Edit Smart Playlist…	edit-smart	Select a Smart Playlist first.
+Add File to Library…	add-file	ok
+Add Folder to Library…	add-folder	ok
+Check Music Folders Again	rescan	ok
+Import Playlist…	import-playlist	ok
+Export Playlist…	export-playlist	ok
+Sync	na:Sync	“Sync” isn't available in Folio Chord.
+Back Up	na:Back Up	“Back Up” isn't available in Folio Chord.
+Subscribe to Podcast…	subscribe	ok
+Import Podcasts (OPML)…	import-opml	ok
+Export Podcasts (OPML)…	export-opml	ok
+Show in Files	show-in-files	ok
+Burn Playlist to Disc…	burn	Choose the playlist to burn in the source list first.
+Close Window	close	skipped (closes the window)
+Quit	quit	skipped (closes the window)
+Copy	copy	ok
+Delete	delete	ok
+Select All	select-all	ok
+Select None	select-none	ok
+Get Info	get-info	ok
+★★★★★	rate:100	ok
+★★★★	rate:80	ok
+★★★	rate:60	ok
+★★	rate:40	ok
+★	rate:20	ok
+None	rate:0	ok
+Check Selection	check-selection	ok
+Uncheck Selection	uncheck-selection	ok
+View Options…	view-options	ok
+Options…	options	ok
+as List	view:list	ok
+as Album List	view:albums	ok
+as Grid	view:grid	ok
+Show/Hide Column Browser	toggle-browser	ok
+Show/Hide Artwork	toggle-artwork	ok
+Show Up Next	up-next	ok
+Show Visualizer	visualizer	ok
+Switch to Mini Player	mini-player	ok
+Full Screen	fullscreen	ok
+Play/Pause	play-pause	ok
+Stop	stop	ok
+Next	next	ok
+Previous	previous	ok
+Go to Current Song	go-current	ok
+Increase Volume	volume-up	ok
+Decrease Volume	volume-down	ok
+Mute	mute	ok
+Shuffle On/Off	shuffle	ok
+By Songs	shuffle-by:songs	ok
+By Albums	shuffle-by:albums	ok
+Off	repeat:off	ok
+All	repeat:all	ok
+One	repeat:one	ok
+Play Next (selection)	play-next	ok
+Add to Up Next	add-up-next	ok
+Clear Up Next	clear-up-next	ok
+Eject Disc	eject	ok
+Search the Store	na:Search the Store	“Search the Store” isn't available in Folio Chord.
+Sign In…	na:Sign In	“Sign In” isn't available in Folio Chord.
+Authorize This Computer…	na:Authorize This Computer	“Authorize This Computer” isn't available in Folio Chord.
+Check for Available Downloads…	na:Check for Available Downloads	“Check for Available Downloads” isn't available in Folio Chord.
+Turn On Match	na:Match	“Match” isn't available in Folio Chord.
+Open Stream…	open-stream	ok
+Subscribe to Podcast…	subscribe	ok
+Refresh All Podcasts	refresh-podcasts	ok
+Import CD	import-cd	There's no audio CD in the drive.
+Get Track Names	get-track-names	There's no audio CD in the drive.
+Create AAC Version	convert:AAC	ok
+Create MP3 Version	convert:MP3	ok
+Create FLAC Version	convert:FLAC	ok
+Create Apple Lossless Version	convert:Apple Lossless	ok
+Get Album Artwork	get-artwork	Artwork was found for 0 of 1 albums.
+Minimize	minimize	skipped (closes the window)
+Zoom	zoom	ok
+Equalizer	equalizer	ok
+Folio Chord	front	ok
+Keyboard Shortcuts	shortcuts	ok
+About Folio Chord	about	ok
