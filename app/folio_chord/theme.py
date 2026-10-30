@@ -217,6 +217,18 @@ tooltip, tooltip.background { background-color: %(tip)s; color: %(tip_fg)s; bord
 tooltip label { color: %(tip_fg)s; padding: 2px 3px; }
 tooltip * { background-color: transparent; }
 
+/* the title bar GTK draws itself (Wayland) */
+.chord-own > .titlebar, .chord-own headerbar.titlebar, .chord-own > headerbar {
+  background-image: linear-gradient(to bottom, %(top1)s, %(top1)s); background-color: %(top1)s; color: %(top_fg)s;
+  border-color: %(line)s; box-shadow: none; }
+.chord-own > .titlebar label, .chord-own headerbar.titlebar label, .chord-own headerbar label.title { color: %(top_fg)s; }
+.chord-own headerbar button.titlebutton, .chord-own .titlebar button.titlebutton { background-image: none; background-color: transparent;
+  border: none; box-shadow: none; color: %(top_fg)s; }
+.chord-own headerbar button.titlebutton:hover { background-color: alpha(%(top_fg)s, 0.12); }
+.chord-own headerbar button.titlebutton image { color: %(top_fg)s; }
+.chord-dialog > .titlebar, .chord-dialog headerbar.titlebar { background-image: none; background-color: %(top1)s; color: %(top_fg)s; }
+.chord-dialog headerbar.titlebar label, .chord-dialog headerbar button.titlebutton image { color: %(top_fg)s; }
+.chord-dialog headerbar button.titlebutton { background-image: none; background-color: transparent; border: none; box-shadow: none; }
 .chord-mini { background-image: linear-gradient(to bottom, %(top1)s, %(top2)s); }
 .chord-mini label { color: %(top_fg)s; }
 .chord-vis, .chord-vis.background { background-color: %(vis)s; }
