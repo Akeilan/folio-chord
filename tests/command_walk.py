@@ -21,7 +21,8 @@ def record(win_, text, title=None):
 dialogs.message = record
 for t in ("Get Info", "Multiple Item Information", "Smart Playlist", "View Options", "Options", "Burn Settings",
           "Keyboard Shortcuts", "About Folio Chord", "Subscribe to Podcast", "Podcast Settings", "Open Stream", "Confirm",
-          "Choose", "Equalizer"):
+          "Choose", "Equalizer", "Add Stream to Favourites", "Organize Music Folder", "Make Preset", "Edit Presets",
+          "Jump to File"):
     dialogs.RESPONSE[t] = Gtk.ResponseType.CANCEL
 for name in ("choose_files", "choose_folder", "save_file"):
     setattr(dialogs, name, (lambda *a, **k: [] if name == "choose_files" else None))
