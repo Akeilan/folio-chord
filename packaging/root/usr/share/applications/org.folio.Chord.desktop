@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Chord
+GenericName=Music Player
+Comment=Play your music, internet radio and podcasts
+Exec=folio-chord %U
+Icon=folio-chord
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/flac;audio/x-flac;audio/ogg;audio/x-vorbis+ogg;audio/opus;audio/x-wav;audio/wav;audio/x-aiff;audio/x-mpegurl;
+Keywords=music;player;itunes;radio;podcast;playlist;cd;
+StartupWMClass=org.folio.Chord
+Actions=PlayPause;Next;
+
+[Desktop Action PlayPause]
+Name=Play/Pause
+Exec=dbus-send --session --type=method_call --dest=org.mpris.MediaPlayer2.folio_chord /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.PlayPause
+
+[Desktop Action Next]
+Name=Next
+Exec=dbus-send --session --type=method_call --dest=org.mpris.MediaPlayer2.folio_chord /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player.Next

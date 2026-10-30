@@ -23,6 +23,7 @@ from . import net, tags  # noqa: E402
 Gst.init(None)
 
 MUSICBRAINZ = os.environ.get("FOLIO_CHORD_MUSICBRAINZ", "https://musicbrainz.org/ws/2")
+COVERART = os.environ.get("FOLIO_CHORD_COVERART", "https://coverartarchive.org")
 MB_AGENT = "FolioChord/%s ( https://github.com/Akeilan/folio-chord )" % net.VERSION
 
 # Import Settings: label -> (extension, encoder pipeline)
@@ -140,6 +141,24 @@ def lookup(discid):
     return {"album": rel.get("title") or "", "artist": credit(rel.get("artist-credit")),
             "year": int(year.group(0)) if year else 0, "genre": "", "tracks": tracks,
             "disc_no": int(medium.get("position") or 1), "disc_count": len(rel.get("media") or []) or 1}
+
+
+def find_artwork(album, artist):
+    """An album's front cover from the Cover Art Archive (MusicBrainz's), as bytes, or None."""
+    if not album:
+        return None
+    q = 'release:"%s"' % album.replace('"', "")
+    if artist:
+        q += ' AND artist:"%s"' % artist.replace('"', "")
+    d = net.get_json(net.url(MUSICBRAINZ, "/release/", query=q, fmt="json", limit=5), headers={"User-Agent": MB_AGENT})
+    for rel in d.get("releases") or []:
+        if int(rel.get("score") or 0) < 80:
+            continue
+        try:
+            return net.get(COVERART.rstrip("/") + "/release/%s/front-500" % rel["id"], headers={"User-Agent": MB_AGENT})
+        except Exception:       # noqa: BLE001 — this release has no cover; try the next
+            continue
+    return None
 
 
 def safe(s):
