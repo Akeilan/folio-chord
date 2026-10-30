@@ -202,13 +202,21 @@ class Engine:
         elif t == Gst.MessageType.STATE_CHANGED and msg.src is pipe.pb and pipe is self.cur:
             old, new, _p = msg.parse_state_changed()
             st = {Gst.State.PLAYING: "playing", Gst.State.PAUSED: "paused"}.get(new)
-            if st and st != self.state and not (st == "paused" and self.state == "loading"):
+            if st and st != self.state and not (st == "paused" and (self.state == "loading" or getattr(pipe, "buffering", False))):
                 self.state = st
                 self._emit("state", st)
             if new == Gst.State.PAUSED and old == Gst.State.READY:
                 self._start_at(pipe)
         elif t == Gst.MessageType.BUFFERING and pipe is self.cur:
             pct = msg.parse_buffering()
+            # a network stream waits while it fills up, then carries on
+            if (pipe.item or {}).get("stream") and self.state in ("playing", "loading", "buffering"):
+                if pct < 100:
+                    pipe.pb.set_state(Gst.State.PAUSED)
+                    pipe.buffering = True
+                elif getattr(pipe, "buffering", False):
+                    pipe.buffering = False
+                    pipe.pb.set_state(Gst.State.PLAYING)
             self._emit("buffering", pct)
 
     # ---------------------------------------------------------------- controls
