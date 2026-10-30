@@ -163,12 +163,16 @@ class RadioView(Gtk.Paned):
         net.in_thread(fn, done, fail)
 
     def set_stations(self, stations):
+        keep = {x["uuid"] for x in self.selected()}
         self.stations = list(stations)
         self.store.clear()
         favs = {f["uuid"] for f in radio.favourites(self.lib)}
         for i, s in enumerate(self.stations):
             self.store.append(["♥" if s["uuid"] in favs else "", s["name"], ", ".join(s.get("tags", [])[:4]),
                                s.get("country", ""), "%d kbps" % s["bitrate"] if s.get("bitrate") else "", i])
+        for row in self.store:
+            if self.stations[row[5]]["uuid"] in keep:
+                self.view.get_selection().select_path(row.path)
         self.hint.set_text("%d stations from radio-browser.info." % len(self.stations))
         self.win.update_status()
         self._sync_fav()
