@@ -7,6 +7,7 @@ import os
 from gi.repository import Gdk, GLib, Gtk, Pango
 
 from . import APP_NAME, VERSION, appearance, art, cd, theme, views
+from .tags import is_audio as tags_is_audio
 
 NOT_HERE = "“%s” isn't available in Folio Chord."
 
@@ -82,9 +83,28 @@ class Lcd(Gtk.Box):
         self.remaining.set_tooltip_text("Show the total time or the time left")
         self.remaining.connect("clicked", self._flip)
         self.show_total = False
+        # podcast controls (C3-15): back 15 s, forward 30 s, speed
+        self.b_back = Gtk.Button()
+        self.b_back.set_image(icon("skip-back"))
+        self.b_back.set_tooltip_text("Back 15 seconds")
+        self.b_fwd = Gtk.Button()
+        self.b_fwd.set_image(icon("skip-fwd"))
+        self.b_fwd.set_tooltip_text("Forward 30 seconds")
+        self.b_speed = Gtk.Button(label="1×")
+        self.b_speed.set_tooltip_text("Playback speed (click to change)")
+        for pb_ in (self.b_back, self.b_fwd, self.b_speed):
+            pb_.get_style_context().add_class("chord-flat")
+            pb_.set_no_show_all(True)
+        self.b_speed.get_child().get_style_context().add_class("chord-lcd-time")
+        self.b_back.connect("clicked", lambda *_: win.run("skip:-15"))
+        self.b_fwd.connect("clicked", lambda *_: win.run("skip:30"))
+        self.b_speed.connect("clicked", lambda *_: self._next_speed())
+        row.pack_start(self.b_back, False, False, 0)
         row.pack_start(self.elapsed, False, False, 0)
         row.pack_start(self.scale, True, True, 0)
         row.pack_start(self.remaining, False, False, 0)
+        row.pack_start(self.b_fwd, False, False, 0)
+        row.pack_start(self.b_speed, False, False, 0)
         b.pack_start(self.title, False, False, 0)
         b.pack_start(self.sub, False, False, 0)
         b.pack_start(row, False, False, 0)
@@ -104,6 +124,13 @@ class Lcd(Gtk.Box):
         self.busy = None
         GLib.timeout_add(500, self._tick)
         GLib.timeout_add_seconds(4, self._alternate)
+
+    def _next_speed(self):
+        pb = self.win.app.playback
+        speeds = list(pb.SPEEDS)
+        cur = pb.engine.rate
+        nxt = speeds[(min(range(len(speeds)), key=lambda i: abs(speeds[i] - cur)) + 1) % len(speeds)]
+        self.win.run("speed:%g" % nxt)
 
     def _flip(self, *_):
         self.show_total = not self.show_total
@@ -142,6 +169,11 @@ class Lcd(Gtk.Box):
             if not n:
                 return
         self.stack.set_visible_child_name("playing")
+        ep = n["kind"] == "episode"
+        for b in (self.b_back, self.b_fwd, self.b_speed):
+            b.set_visible(ep)
+        if ep:
+            self.b_speed.set_label("%g×" % self.win.app.playback.engine.rate)
         if n["kind"] == "station":
             self.title.set_text(n["title"])
             self.sub.set_text(pb.stream_title or n.get("album") or "Internet radio")
@@ -182,6 +214,12 @@ class Window(Gtk.ApplicationWindow):
         self.get_style_context().add_class("chord-own")
         self.set_default_size(1180, 740)
         self.set_icon_name("folio-chord")
+        # the title bar in Chord's colour, drawn by Chord on X11 and Wayland alike (as the rest of the suite)
+        self.header = Gtk.HeaderBar()
+        self.header.set_show_close_button(True)
+        self.header.set_title(APP_NAME)
+        self.header.get_style_context().add_class("chord-titlebar")
+        self.set_titlebar(self.header)
         self.dark = appearance.is_dark()
         appearance.on_change(self._dark_changed)
         self.accel = Gtk.AccelGroup()
@@ -230,6 +268,17 @@ class Window(Gtk.ApplicationWindow):
         self.browser_box.set_visible(self.settings["browser"])
         self.art_box.set_visible(self.settings["artwork"])
         self.art_img.set_from_pixbuf(art.placeholder(180, self.dark))
+        if self.settings.get("lyrics"):
+            self.lyrics_box.set_visible(True)
+            self.lyrics_box.show_all()
+        from . import watcher
+        self.watcher = watcher.Watcher(self.lib, on_change=lambda: None)
+        if not os.environ.get("FOLIO_CHORD_NO_SCAN"):
+            GLib.timeout_add(1500, lambda: (self.watcher.watch(self.music_roots()), False)[1])
+        if self.settings.get("resume", True) and not os.environ.get("FOLIO_CHORD_NO_RESUME"):
+            GLib.idle_add(lambda: (self.app.playback.restore_session(), False)[1])
+        if self.settings.get("look") == "classic":
+            GLib.idle_add(lambda: (self.run("look:classic"), False)[1])
         if not os.environ.get("FOLIO_CHORD_NO_SCAN"):
             GLib.timeout_add(400, lambda: (self.rescan(), False)[1])
         GLib.timeout_add_seconds(3, self._check_cd)
@@ -262,7 +311,8 @@ class Window(Gtk.ApplicationWindow):
                 ("Check Music Folders Again", "rescan", None),
                 None,
                 ("sub", "Library", [("Import Playlist…", "import-playlist", None),
-                                    ("Export Playlist…", "export-playlist", None)]),
+                                    ("Export Playlist…", "export-playlist", None), None,
+                                    ("Import iTunes Library…", "import-itunes", None)]),
                 ("sub", "Devices", [("Sync", "na:Sync", None), ("Back Up", "na:Back Up", None)]),
                 None,
                 ("Subscribe to Podcast…", "subscribe", None),
@@ -292,14 +342,22 @@ class Window(Gtk.ApplicationWindow):
                 ("as List", "view:list", "<Alt><Control>3"),
                 ("as Album List", "view:albums", "<Alt><Control>4"),
                 ("as Grid", "view:grid", "<Alt><Control>5"),
+                ("as Cover Flow", "view:coverflow", "<Alt><Control>6"),
                 None,
+                ("Show Duplicate Items", "duplicates:name", None),
+                ("Show Exact Duplicate Items", "duplicates:exact", None),
+                ("Show All Items", "duplicates:off", None),
+                None,
+                ("Show/Hide Lyrics", "toggle-lyrics", "<Control>y"),
                 ("Show/Hide Column Browser", "toggle-browser", "<Control>b"),
                 ("Show/Hide Artwork", "toggle-artwork", "<Control>g"),
                 ("Show Up Next", "up-next", None),
                 None,
                 ("Show Visualizer", "visualizer", "<Control>t"),
                 ("Switch to Mini Player", "mini-player", "<Shift><Control>m"),
-                ("Full Screen", "fullscreen", "<Control><Shift>f")]),
+                ("Full Screen", "fullscreen", "<Control><Shift>f"),
+                None,
+                ("sub", "Look", [("Standard", "look:standard", None), ("Chordamp", "look:classic", "<Control><Shift>w")])]),
             ("_Controls", [
                 ("Play/Pause", "play-pause", None),
                 ("Stop", "stop", "<Control>period"),
@@ -310,6 +368,14 @@ class Window(Gtk.ApplicationWindow):
                 ("Increase Volume", "volume-up", "<Control>Up"),
                 ("Decrease Volume", "volume-down", "<Control>Down"),
                 ("Mute", "mute", "<Alt><Control>Down"),
+                None,
+                ("Skip Back 15 Seconds", "skip:-15", "<Control><Shift>Left"),
+                ("Skip Forward 30 Seconds", "skip:30", "<Control><Shift>Right"),
+                ("sub", "Playback Speed", [("%s×" % ("%g" % r), "speed:%g" % r, None) for r in (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)]),
+                ("sub", "Sleep Timer", [("Off", "sleep:0", None), ("In 15 Minutes", "sleep:15", None),
+                                        ("In 30 Minutes", "sleep:30", None), ("In 45 Minutes", "sleep:45", None),
+                                        ("In 1 Hour", "sleep:60", None), ("In 90 Minutes", "sleep:90", None),
+                                        ("At the End of This Song or Episode", "sleep:-1", None)]),
                 None,
                 ("sub", "Shuffle", [("Shuffle On/Off", "shuffle", "<Control>s"), ("By Songs", "shuffle-by:songs", None),
                                     ("By Albums", "shuffle-by:albums", None)]),
@@ -328,6 +394,7 @@ class Window(Gtk.ApplicationWindow):
                 ("Turn On Match", "na:Match", None)]),
             ("_Advanced", [
                 ("Open Stream…", "open-stream", "<Control>u"),
+                ("Add Stream to Favourites…", "add-stream", None),
                 ("Subscribe to Podcast…", "subscribe", None),
                 ("Refresh All Podcasts", "refresh-podcasts", None),
                 None,
@@ -337,12 +404,16 @@ class Window(Gtk.ApplicationWindow):
                 ("sub", "Create Version", [("Create AAC Version", "convert:AAC", None), ("Create MP3 Version", "convert:MP3", None),
                                            ("Create FLAC Version", "convert:FLAC", None),
                                            ("Create Apple Lossless Version", "convert:Apple Lossless", None)]),
-                ("Get Album Artwork", "get-artwork", None)]),
+                ("Get Album Artwork", "get-artwork", None),
+                None,
+                ("Organize Music Folder…", "organize", None),
+                ("Undo Organize Music Folder", "undo-organize", None)]),
             ("_Window", [
                 ("Minimize", "minimize", "<Control>m"),
                 ("Zoom", "zoom", None),
                 None,
                 ("Equalizer", "equalizer", "<Alt><Control>e"),
+                ("Sound Output…", "outputs", None),
                 (APP_NAME, "front", "<Alt><Control>1")]),
             ("_Help", [
                 ("Keyboard Shortcuts", "shortcuts", "F1"),
@@ -408,7 +479,7 @@ class Window(Gtk.ApplicationWindow):
         vb = Gtk.Box(spacing=0)
         vb.get_style_context().add_class("linked")
         for key, name, tip in (("list", "view-list", "View as list"), ("albums", "view-albums", "View as album list"),
-                               ("grid", "view-grid", "View as grid")):
+                               ("grid", "view-grid", "View as grid"), ("coverflow", "coverflow", "View in Cover Flow")):
             b = seg_button(name, tip, lambda on, k=key: on and self.run("view:" + k), toggle=True)
             self.viewbtns[key] = b
             vb.pack_start(b, False, False, 0)
@@ -708,7 +779,7 @@ class Window(Gtk.ApplicationWindow):
         self.banner.pack_start(self.banner_label, True, True, 0)
         self.banner_btn = Gtk.Button(label="Add Folder…")
         self.banner_btn.get_style_context().add_class("chord-button")
-        self.banner_btn.connect("clicked", lambda *_: self.run("add-folder"))
+        self.banner_btn.connect("clicked", lambda b: self.run("duplicates:off" if b.get_label() == "Show All Items" else "add-folder"))
         self.banner.pack_end(self.banner_btn, False, False, 0)
         self.banner.set_no_show_all(True)
         box.pack_start(self.banner, False, False, 0)
@@ -731,7 +802,36 @@ class Window(Gtk.ApplicationWindow):
         self.songview.add_named(self.songs, "list")
         self.songview.add_named(self.albumlist, "albums")
         self.songview.add_named(self.grid, "grid")
-        box.pack_start(self.songview, True, True, 0)
+        # Cover Flow sits above the song list (C3-21)
+        self.coverflow = views.CoverFlow(self)
+        self.coverflow.connect("chosen", lambda w, rows: self.songs.select_ids([r["id"] for r in rows]))
+        self.coverflow.connect("play", lambda w, rows: self.app.playback.play_songs([r["id"] for r in rows], 0))
+        self.coverflow.set_no_show_all(True)
+        box.pack_start(self.coverflow, False, False, 0)
+        # the lyrics beside the songs (C3-19)
+        h = Gtk.Paned()
+        h.pack1(self.songview, True, False)
+        self.lyrics_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.lyrics_box.get_style_context().add_class("chord-lyrics")
+        self.lyrics_box.set_size_request(260, -1)
+        self.lyrics_title = Gtk.Label(xalign=0)
+        self.lyrics_title.set_margin_start(8)
+        self.lyrics_title.set_margin_top(6)
+        self.lyrics_title.set_ellipsize(Pango.EllipsizeMode.END)
+        self.lyrics_view = Gtk.TextView()
+        self.lyrics_view.set_editable(False)
+        self.lyrics_view.set_cursor_visible(False)
+        self.lyrics_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.lyrics_view.set_left_margin(8)
+        self.lyrics_view.set_right_margin(8)
+        self.lyrics_view.get_style_context().add_class("chord-notes")
+        lsw = Gtk.ScrolledWindow()
+        lsw.add(self.lyrics_view)
+        self.lyrics_box.pack_start(self.lyrics_title, False, False, 0)
+        self.lyrics_box.pack_start(lsw, True, True, 0)
+        self.lyrics_box.set_no_show_all(True)
+        h.pack2(self.lyrics_box, False, False)
+        box.pack_start(h, True, True, 0)
         self.content.add_named(box, "songs")
 
     def load_songs(self):
@@ -763,6 +863,7 @@ class Window(Gtk.ApplicationWindow):
         if kind == "cd":
             return
         rows = self.browser.filter(self.all_rows) if self.browser_box.get_visible() else self.all_rows
+        rows = self.duplicate_filter(rows)
         if q:
             words = q.split()
             rows = [r for r in rows if all(any(w in (r[c] or "").lower() for c in ("title", "artist", "album", "album_artist",
@@ -774,10 +875,28 @@ class Window(Gtk.ApplicationWindow):
             self.albumlist.set_rows(rows)
         elif self.songview.get_visible_child_name() == "grid":
             self.grid.set_rows(rows)
+        if self.coverflow.get_visible():
+            self.coverflow.set_rows(rows)
+        if getattr(self, "dup_mode", None):
+            self.banner_label.set_text("Showing %sduplicate items: %d songs." % ("exact " if self.dup_mode == "exact" else "", len(rows)))
+            self.banner_btn.set_label("Show All Items")
+            self.banner.set_no_show_all(False)
+            self.banner.show_all()
+        elif self.banner_btn.get_label() == "Show All Items":
+            self.banner.hide()
+            self.banner_btn.set_label("Add Folder…")
         self.update_status()
 
     def set_view(self, key):
-        self.songview.set_visible_child_name(key)
+        flow = key == "coverflow"
+        self.coverflow.set_visible(flow)
+        if flow:
+            self.coverflow.show()
+            self.coverflow.set_rows(self.rows)
+            key_list = "list"
+        else:
+            key_list = key
+        self.songview.set_visible_child_name(key_list)
         for k, b in self.viewbtns.items():
             b._quiet = True
             b.set_active(k == key)
@@ -827,6 +946,8 @@ class Window(Gtk.ApplicationWindow):
 
     def _selection_changed(self):
         rows = self.selected_rows()
+        if self.app.playback.now is None or self.app.playback.engine.state == "stopped":
+            self.update_lyrics()
         if self.app.playback.now is None and rows:
             self._show_art(rows[0], "Selected Item")
 
@@ -907,8 +1028,28 @@ class Window(Gtk.ApplicationWindow):
             self.fill_sources()
             if self.settings["cd_lookup"] and d.get("discid"):
                 self.run("get-track-names")
+            else:
+                self._cd_inserted()
         net.in_thread(read, got, lambda e: setattr(self, "_cd_busy", False))
         return True
+
+    def _cd_inserted(self):
+        """What Options says to do when a CD goes in (C3-12): show it, ask, or import it."""
+        key = (self.cd_info or {}).get("discid") or id(self.cd_info)
+        if getattr(self, "_cd_acted", None) == key:
+            return
+        self._cd_acted = key
+        how = self.settings.get("cd_after_import") or "nothing"
+        if how == "nothing":
+            return
+        self.select_source("cd")
+        if how == "ask":
+            from . import dialogs
+            if dialogs.confirm(self, "Import “%s” into your library?" % (self.cd_info.get("album") or "this CD"),
+                               "As %s; change this in Options." % self.settings["import_format"], "Import"):
+                self.run("import-cd")
+        elif how in ("import", "import-eject"):
+            self.run("import-cd")
 
     def play_cd_track(self, n):
         if self.cd_device and self.cd_device.startswith("fake:"):
@@ -941,10 +1082,15 @@ class Window(Gtk.ApplicationWindow):
         bar.set_center_widget(self.status)
         right = Gtk.Box(spacing=4)
         right.pack_start(seg_button("up-next", "Up Next", lambda: self.run("up-next")), False, False, 0)
+        self.b_output = seg_button("speaker", "Sound output", lambda: self.run("outputs"))
+        right.pack_start(self.b_output, False, False, 0)
         right.pack_start(seg_button("equalizer", "Equalizer", lambda: self.run("equalizer")), False, False, 0)
         right.pack_start(seg_button("visualizer", "Visualizer", lambda: self.run("visualizer")), False, False, 0)
         right.pack_start(seg_button("mini", "Mini Player", lambda: self.run("mini-player")), False, False, 0)
         self.b_upnext = right.get_children()[0]
+        self.sleep_label = Gtk.Label()
+        self.sleep_label.get_style_context().add_class("chord-dim")
+        bar.pack_end(self.sleep_label, False, False, 4)
         bar.pack_end(right, False, False, 0)
         return bar
 
@@ -997,6 +1143,11 @@ class Window(Gtk.ApplicationWindow):
                 self.art_img.set_from_pixbuf(art.placeholder(180, self.dark))
             if self.mini:
                 self.mini.update()
+            self.update_lyrics()
+        elif ev == "sleep":
+            self.sleep_label.set_text("" if not val else "Sleep: end of this one" if val == -1 else "Sleep in %d min" % val)
+        elif ev == "speed":
+            self.lcd.update()
         elif ev == "tags":
             self.lcd.update()
             if self.mini:
@@ -1099,6 +1250,12 @@ class Window(Gtk.ApplicationWindow):
                         if tid:
                             ids.append(tid)
             else:
+                if self.settings.get("copy_to_media") and tags_is_audio(p) and not self._inside_roots(p):
+                    from . import organize, tags
+                    try:
+                        p = organize.copy_in(p, self.app.media_folder(), tags.read(p))
+                    except Exception:       # noqa: BLE001
+                        pass
                 tid = self.lib.add_file(p)
                 if tid:
                     ids.append(tid)
@@ -1106,6 +1263,10 @@ class Window(Gtk.ApplicationWindow):
         if play and ids:
             self.app.playback.play_songs(ids, 0)
         return ids
+
+    def _inside_roots(self, p):
+        p = os.path.abspath(p)
+        return any(p.startswith(os.path.abspath(r).rstrip("/") + "/") for r in self.music_roots())
 
     def _podcast_timer(self):
         self.podview.refresh_due()
@@ -1554,16 +1715,19 @@ class Window(Gtk.ApplicationWindow):
             self.lcd.set_busy(None)
             if not found:
                 self.info("No track names were found for this CD.")
+                self._cd_inserted()
                 return
             self.cd_info.update({k: found[k] for k in ("album", "artist", "year", "disc_no", "disc_count")})
             self.cd_info["tracks"] = (found["tracks"] + [{}] * len(self.cd_info["lengths"]))[:len(self.cd_info["lengths"])]
             self.fill_sources()
             if self.source[0] == "cd":
                 self.fill_cd()
+            self._cd_inserted()
 
         def fail(e):
             self.lcd.set_busy(None)
             self.info("Track names couldn't be looked up: %s" % e)
+            self._cd_inserted()
         net.in_thread(lambda: cd.lookup(self.cd_info["discid"]), got, fail)
         return True
 
@@ -1649,6 +1813,226 @@ class Window(Gtk.ApplicationWindow):
     def act_shortcuts(self):
         from . import dialogs
         return dialogs.shortcuts(self)
+
+    # ---- Chord 0.2
+    def act_import_itunes(self):
+        from . import dialogs, itunes
+        f = dialogs.choose_files(self, "Import iTunes Library", patterns=[("iTunes library (XML)", ["*.xml"])], multiple=False)
+        if not f:
+            return None
+        try:
+            res = itunes.import_library(self.lib, f[0])
+        except Exception as e:      # noqa: BLE001
+            self.info("That file couldn't be read as an iTunes library: %s" % e)
+            return None
+        self.fill_sources()
+        miss = res["unmatched"]
+        self.info("%d songs matched: their ratings, play counts and dates came across, with %d playlists.%s" % (
+            res["songs"], res["playlists"],
+            ("\n\n%d songs from iTunes aren't in this library (they may be in a folder Chord doesn't watch):\n%s"
+             % (len(miss), "\n".join(miss[:40]) + ("\n…" if len(miss) > 40 else ""))) if miss else ""))
+        return res
+
+    def act_duplicates(self, how):
+        """View > Show Duplicate Items (C3-20)."""
+        self.dup_mode = None if how == "off" else how
+        if self.source[0] not in ("music", "playlist", "smart", "folder"):
+            self.select_source("music")
+        self.load_songs()
+        return len(self.rows)
+
+    def duplicate_filter(self, rows):
+        how = getattr(self, "dup_mode", None)
+        if not how:
+            return rows
+
+        def key(r):
+            k = ((r["title"] or "").strip().lower(), (r["artist"] or "").strip().lower())
+            if how == "exact":
+                k += ((r["album"] or "").strip().lower(), int(round((r["duration"] or 0) / 2.0)))
+            return k
+        groups = {}
+        for r in rows:
+            groups.setdefault(key(r), []).append(r)
+        return [r for r in rows if len(groups[key(r)]) > 1]
+
+    def act_toggle_lyrics(self):
+        on = not self.lyrics_box.get_visible()
+        self.lyrics_box.set_visible(on)
+        self.settings.set("lyrics", on)
+        self.update_lyrics()
+        return on
+
+    def update_lyrics(self):
+        if not self.lyrics_box.get_visible():
+            return
+        from . import tags
+        n = self.app.playback.now
+        rows = self.selected_rows()
+        playing = n and n.get("kind") == "song" and self.app.playback.engine.state != "stopped"
+        r = self.lib.track(n["id"]) if playing else (rows[0] if rows else None)
+        text = ""
+        if r:
+            try:
+                text = tags.lyrics(r["path"])
+            except Exception:       # noqa: BLE001
+                text = ""
+        self.lyrics_title.set_markup("<b>%s</b>\n<small>%s</small>" % (GLib.markup_escape_text(r["title"] or "") if r else "Lyrics",
+                                                                        GLib.markup_escape_text(r["artist"] or "") if r else ""))
+        self.lyrics_view.get_buffer().set_text(text or ("No lyrics for this song. Add them in Get Info > Lyrics." if r else ""))
+
+    def act_skip(self, secs):
+        self.app.playback.skip(float(secs))
+
+    def act_speed(self, rate):
+        n = self.app.playback.now
+        if not n or n.get("kind") != "episode":
+            self.info("Playback speed is for podcast episodes.")
+            return None
+        self.app.playback.set_speed(float(rate))
+        self.lcd.update()
+        return self.app.playback.engine.rate
+
+    def act_sleep(self, minutes):
+        self.app.playback.sleep_in(int(minutes))
+        return int(minutes)
+
+    def act_add_stream(self):
+        from . import dialogs, radio
+        n = self.app.playback.now
+        url = n["uri"] if n and n.get("kind") == "station" else ""
+        name = (n.get("title") if n and n.get("kind") == "station" and n.get("title") != url else "") or ""
+        d = dialogs.Dialog(self, "Add Stream to Favourites")
+        g = dialogs.grid()
+        e_name = Gtk.Entry(text=name, width_chars=40)
+        e_url = Gtk.Entry(text=(n.get("station") or {}).get("url") or url if n else "", width_chars=40)
+        g.attach(dialogs.lab("Name"), 0, 0, 1, 1)
+        g.attach(e_name, 1, 0, 1, 1)
+        g.attach(dialogs.lab("Address"), 0, 1, 1, 1)
+        g.attach(e_url, 1, 1, 1, 1)
+        d.body.pack_start(g, False, False, 0)
+        d.name_entry, d.url_entry = e_name, e_url
+        r = d.ask()
+        nm, u = e_name.get_text().strip(), e_url.get_text().strip()
+        d.destroy()
+        if r != Gtk.ResponseType.OK or "://" not in u:
+            return None
+        st = radio.custom_station(nm or u, u)
+        radio.set_favourite(self.lib, st, True)
+        if self.source[0] == "radio":
+            self.radioview.refresh()
+        return st
+
+    def music_roots(self):
+        roots = list(self.settings["music_folders"] or [])
+        m = self.app.media_folder()
+        if m and m not in roots:
+            roots.append(m)
+        return [r for r in roots if os.path.isdir(r)]
+
+    def act_organize(self):
+        """Advanced > Organize Music Folder (C3-26): show what moves, then move it."""
+        from . import dialogs, organize
+        roots = self.music_roots()
+        moves = organize.plan(self.lib, roots)
+        if not moves:
+            self.info("Your music folder is in order: every song is in Artist / Album / Song.")
+            return []
+        d = dialogs.Dialog(self, "Organize Music Folder", (("Cancel", Gtk.ResponseType.CANCEL), ("Organize", Gtk.ResponseType.OK)))
+        d.set_default_size(720, 460)
+        head = Gtk.Label(xalign=0)
+        head.set_markup("<b>%d songs will move</b> into Artist / Album / Song. Playlists, play counts and ratings stay "
+                        "with them; you can undo this afterwards." % len(moves))
+        head.set_line_wrap(True)
+        d.body.pack_start(head, False, False, 0)
+        store = Gtk.ListStore(str, str)
+        for _t, old, new in moves:
+            root = organize.root_of(old, roots) or ""
+            store.append([os.path.relpath(old, root), os.path.relpath(new, root)])
+        v = Gtk.TreeView(model=store)
+        for title, i in (("Now", 0), ("Moves to", 1)):
+            rr = Gtk.CellRendererText()
+            rr.set_property("ellipsize", Pango.EllipsizeMode.START)
+            c = Gtk.TreeViewColumn(title, rr, text=i)
+            c.set_expand(True)
+            c.set_resizable(True)
+            v.append_column(c)
+        sw = Gtk.ScrolledWindow()
+        sw.add(v)
+        d.body.pack_start(sw, True, True, 0)
+        d.moves = moves
+        r = d.ask()
+        d.destroy()
+        if r != Gtk.ResponseType.OK:
+            return None
+        if getattr(self, "watcher", None):
+            self.watcher.paused = True
+        try:
+            done, errors, rec = organize.apply(self.lib, moves, roots)
+        finally:
+            if getattr(self, "watcher", None):
+                GLib.timeout_add(3000, lambda: (setattr(self.watcher, "paused", False), self.watcher.watch(roots), False)[2])
+        import json
+        self.lib.put("last_organize", json.dumps({"rec": rec, "roots": roots}))
+        self.load_songs()
+        if errors:
+            self.info("%d songs moved. These couldn't be:\n%s" % (len(done), "\n".join(errors[:30])))
+        return done
+
+    def act_undo_organize(self):
+        import json
+        from . import organize
+        d = json.loads(self.lib.get("last_organize") or "null")
+        if not d:
+            self.info("There's no Organize Music Folder to undo.")
+            return None
+        if getattr(self, "watcher", None):
+            self.watcher.paused = True
+        try:
+            moved, errors = organize.undo(self.lib, d["rec"], d["roots"])
+        finally:
+            if getattr(self, "watcher", None):
+                GLib.timeout_add(3000, lambda: (setattr(self.watcher, "paused", False), False)[1])
+        self.lib.put("last_organize", "null")
+        self.load_songs()
+        if errors:
+            self.info("%d songs went back. These couldn't:\n%s" % (len(moved), "\n".join(errors[:30])))
+        return moved
+
+    def act_outputs(self, relative=None):
+        """The sound outputs (C3-24): the desktop's choice, or a particular one."""
+        from . import player
+        devs = player.Engine.devices()
+        pop = Gtk.Popover.new(relative or self.b_output)
+        pop.get_style_context().add_class("chord-pop")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_border_width(6)
+        t = Gtk.Label(xalign=0)
+        t.set_markup("<b>Play through</b>")
+        box.pack_start(t, False, False, 2)
+        cur = self.settings.get("output") or ""
+        group = None
+        self.output_buttons = {}
+        for name, dev in [("The desktop's choice", None)] + devs:
+            b = Gtk.RadioButton.new_with_label_from_widget(group, name)
+            group = group or b
+            b.set_active((dev is None and not cur) or name == cur)
+            b.connect("toggled", lambda w, n=name, d=dev: w.get_active() and self.choose_output(n if d else "", d))
+            self.output_buttons[name] = b
+            box.pack_start(b, False, False, 0)
+        pop.add(box)
+        box.show_all()
+        pop.popup()
+        self.output_popover = pop
+        return [n for n, _d in devs]
+
+    def choose_output(self, name, dev):
+        self.settings.set("output", name)
+        self.app.playback.engine.set_output(dev)
+
+    def act_look(self, look):
+        from . import classic
+        return classic.switch(self, look)
 
     def act_pod(self, what):
         return self.podview.act(what)

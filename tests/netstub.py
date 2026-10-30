@@ -155,6 +155,8 @@ class Stub:
             return self.j({"ok": True, "url": ""})
         if path.startswith("/stream/") or path.startswith("/ep/"):
             return self.audio, "audio/ogg", 200
+        if path == "/station.pls":      # a station given as a playlist (C3-17)
+            return ("[playlist]\nNumberOfEntries=1\nFile1=%s/stream/from-pls\nTitle1=From PLS\n" % b).encode(), "audio/x-scpls", 200
         if path.startswith("/art/"):
             return b"\x89PNG\r\n\x1a\n", "image/png", 200
         if path.startswith("/feed/"):

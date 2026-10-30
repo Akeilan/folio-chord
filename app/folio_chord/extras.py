@@ -24,12 +24,16 @@ class Equalizer(Gtk.Window):
         self.on.set_active(s["eq_on"])
         self.on.connect("toggled", lambda *_: self.apply())
         self.preset = Gtk.ComboBoxText()
-        self.preset.append("Manual", "Manual")
-        for p in sorted(player.PRESETS):
-            self.preset.append(p, p)
-        self.preset.set_active_id(s["eq_preset"] if s["eq_preset"] in player.PRESETS else "Manual")
+        self.fill_presets(s["eq_preset"])
         self.preset.connect("changed", lambda *_: self.pick())
         top.pack_start(self.on, False, False, 0)
+        # your own presets (C3-25)
+        edit = Gtk.Button(label="Edit List…")
+        edit.connect("clicked", lambda *_: self.edit_list())
+        make = Gtk.Button(label="Make Preset…")
+        make.connect("clicked", lambda *_: self.make_preset())
+        top.pack_end(edit, False, False, 0)
+        top.pack_end(make, False, False, 0)
         top.pack_end(self.preset, False, False, 0)
         box.pack_start(top, False, False, 0)
         sliders = Gtk.Box(spacing=6)
@@ -66,10 +70,93 @@ class Equalizer(Gtk.Window):
         sliders.pack_end(scale_lab, False, False, 0)
         box.pack_start(sliders, True, True, 0)
 
-    def pick(self):
-        name = self.preset.get_active_id()
+    def fill_presets(self, active=None):
+        self._quiet = True
+        self.preset.remove_all()
+        self.preset.append("Manual", "Manual")
+        for p in self.win.app.eq_presets():
+            self.preset.append(p, p)
+        if not self.preset.set_active_id(active or "Manual"):
+            self.preset.set_active_id("Manual")
+        self._quiet = False
+
+    def make_preset(self, name=None):
+        from . import dialogs
+        if name is None:
+            name = dialogs.ask_text(self, "Make Preset", "Name of the new preset:", "")
+        name = (name or "").strip()
+        if not name:
+            return None
         if name in player.PRESETS:
-            pa, bands = player.PRESETS[name]
+            dialogs.message(self, "“%s” is one of the built-in presets; choose another name." % name)
+            return None
+        c = dict(self.win.settings.get("eq_custom") or {})
+        c[name] = [self.preamp.get_value(), [sc.get_value() for sc in self.scales]]
+        self.win.settings.set("eq_custom", c)
+        self.fill_presets(name)
+        self.apply()
+        return name
+
+    def edit_list(self):
+        """Rename or delete your own presets."""
+        from . import dialogs
+        d = dialogs.Dialog(self, "Edit Presets", (("Done", Gtk.ResponseType.OK),))
+        store = Gtk.ListStore(str)
+        for n in sorted(self.win.settings.get("eq_custom") or {}):
+            store.append([n])
+        v = Gtk.TreeView(model=store)
+        v.set_headers_visible(False)
+        v.append_column(Gtk.TreeViewColumn("", Gtk.CellRendererText(), text=0))
+        sw = Gtk.ScrolledWindow()
+        sw.set_size_request(260, 180)
+        sw.add(v)
+        d.body.pack_start(sw, True, True, 0)
+        row = Gtk.Box(spacing=6)
+        ren = Gtk.Button(label="Rename…")
+        dele = Gtk.Button(label="Delete")
+        row.pack_start(ren, False, False, 0)
+        row.pack_start(dele, False, False, 0)
+        d.body.pack_start(row, False, False, 0)
+
+        def chosen():
+            m, it = v.get_selection().get_selected()
+            return (m, it) if it else (None, None)
+
+        def rename(*_):
+            m, it = chosen()
+            if it is None:
+                return
+            old = m[it][0]
+            new = dialogs.ask_text(d, "Rename Preset", "New name:", old)
+            if new and new.strip() and new.strip() not in player.PRESETS:
+                c = dict(self.win.settings.get("eq_custom") or {})
+                c[new.strip()] = c.pop(old)
+                self.win.settings.set("eq_custom", c)
+                m[it][0] = new.strip()
+
+        def delete(*_):
+            m, it = chosen()
+            if it is None:
+                return
+            c = dict(self.win.settings.get("eq_custom") or {})
+            c.pop(m[it][0], None)
+            self.win.settings.set("eq_custom", c)
+            m.remove(it)
+        ren.connect("clicked", rename)
+        dele.connect("clicked", delete)
+        d.store, d.view, d.rename, d.delete = store, v, rename, delete
+        d.ask()
+        d.destroy()
+        self.fill_presets(self.preset.get_active_id())
+        return [r[0] for r in store]
+
+    def pick(self):
+        if self._quiet:
+            return
+        name = self.preset.get_active_id()
+        pr = self.win.app.eq_preset(name) if name and name != "Manual" else None
+        if pr:
+            pa, bands = pr
             self._quiet = True
             self.preamp.set_value(pa)
             for sc, v in zip(self.scales, bands):

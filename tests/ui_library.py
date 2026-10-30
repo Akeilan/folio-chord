@@ -78,7 +78,7 @@ def main():
         dlg.rating.set_active_id("100")
         dlg.vol.set_value(50)
         dlg.set_art(open(os.path.join(os.environ["FOLIO_TESTS"], "art.png"), "rb").read())
-        check(dlg.nb.get_n_pages() == 4, "Get Info: Summary, Info, Options, Artwork")
+        check(dlg.nb.get_n_pages() == 5, "Get Info: Summary, Info, Options, Lyrics, Artwork")
         return Gtk.ResponseType.OK
     answer("Get Info", edit)
     w.run("get-info")

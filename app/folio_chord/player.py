@@ -61,18 +61,17 @@ class _Pipe:
         self.engine = engine
         self.item = None
         self.pb = Gst.ElementFactory.make("playbin", name)
-        sink_name = os.environ.get("FOLIO_CHORD_AUDIOSINK", "autoaudiosink")
-        sink = Gst.parse_bin_from_description(sink_name, True) if " " in sink_name else Gst.ElementFactory.make(sink_name)
-        if sink_name.startswith("fakesink"):
-            sink.set_property("sync", True)
-        self.pb.set_property("audio-sink", sink)
+        self.pb.set_property("audio-sink", engine.make_sink())
         self.pb.set_property("video-sink", Gst.ElementFactory.make("fakesink"))
         flags = self.pb.get_property("flags")
         self.pb.set_property("flags", flags & ~0x1 & ~0x4)   # no video, no subtitles
         f = Gst.Bin.new("chord-filter")
+        # scaletempo keeps voices at their pitch when podcasts play faster or slower (C3-15)
+        self.tempo = Gst.ElementFactory.make("scaletempo")
         conv = Gst.ElementFactory.make("audioconvert")
         self.gain = Gst.ElementFactory.make("volume")
         self.eq = Gst.ElementFactory.make("equalizer-10bands")
+        self.pan = Gst.ElementFactory.make("audiopanorama")      # balance (Chordamp, C3-28)
         conv2 = Gst.ElementFactory.make("audioconvert")
         self.spec = Gst.ElementFactory.make("spectrum")
         self.spec.set_property("bands", 256)
@@ -81,11 +80,25 @@ class _Pipe:
         self.spec.set_property("post-messages", False)
         for e in (conv, self.gain, self.eq, conv2, self.spec):
             f.add(e)
+        first = conv
+        if self.tempo is not None:
+            pre = Gst.ElementFactory.make("audioconvert")
+            f.add(self.tempo)
+            f.add(pre)
+            pre.link(self.tempo)
+            self.tempo.link(conv)
+            first = pre
         conv.link(self.gain)
-        self.gain.link(self.eq)
+        if self.pan is not None:
+            f.add(self.pan)
+            self.pan.set_property("method", 1)      # simple: the far side is turned down, not mixed in
+            self.gain.link(self.pan)
+            self.pan.link(self.eq)
+        else:
+            self.gain.link(self.eq)
         self.eq.link(conv2)
         conv2.link(self.spec)
-        f.add_pad(Gst.GhostPad.new("sink", conv.get_static_pad("sink")))
+        f.add_pad(Gst.GhostPad.new("sink", first.get_static_pad("sink")))
         f.add_pad(Gst.GhostPad.new("src", self.spec.get_static_pad("src")))
         self.pb.set_property("audio-filter", f)
         self.pb.connect("about-to-finish", self._about_to_finish)
@@ -122,6 +135,11 @@ class Engine:
         self.sound_check = False
         self.crossfade = 0.0        # seconds; 0 = gapless
         self.next_fn = None
+        self.rate = 1.0
+        self.balance = 0.0          # -1 left .. 1 right
+        self.auto_eq = True         # songs' own presets (Get Info) are used; Chordamp's AUTO
+        self.output = None          # a Gst.Device, or None for the desktop's choice (C3-24)
+        self.preset_lookup = lambda name: PRESETS.get(name)     # per-song presets, the app's own too (C3-13, C3-25)
         self.a = _Pipe(self, "chord-a")
         self.b = _Pipe(self, "chord-b")
         self.cur = self.a
@@ -129,6 +147,63 @@ class Engine:
         self.spectrum_on = False
         self._fading = None
         GLib.timeout_add(100, self._tick)
+
+    # ---------------------------------------------------------------- output (C3-24)
+    def make_sink(self):
+        name = os.environ.get("FOLIO_CHORD_AUDIOSINK", "autoaudiosink")
+        if self.output is not None and not name.startswith("fakesink"):
+            try:
+                el = self.output.create_element(None)
+                if el is not None:
+                    return el
+            except Exception:       # noqa: BLE001
+                pass
+        sink = Gst.parse_bin_from_description(name, True) if " " in name else Gst.ElementFactory.make(name)
+        if name.startswith("fakesink"):
+            sink.set_property("sync", True)
+        return sink
+
+    @staticmethod
+    def devices():
+        """The sound outputs on this computer: [(name, Gst.Device)]."""
+        mon = Gst.DeviceMonitor.new()
+        mon.add_filter("Audio/Sink", None)
+        try:
+            mon.start()
+            devs = mon.get_devices() or []
+        finally:
+            mon.stop()
+        out = []
+        for d in devs:
+            out.append((d.get_display_name(), d))
+        return out
+
+    def set_output(self, device):
+        """Play through this output (None: the desktop's choice), carrying on where it was."""
+        self.output = device
+        item, pos, st = self.cur.item, self.position(), self.state
+        for p in (self.a, self.b):
+            p.pb.set_state(Gst.State.NULL)
+            p.pb.set_property("audio-sink", self.make_sink())
+        if item is not None and st in ("playing", "paused"):
+            item = dict(item, start=pos, _started=False)
+            self.play(item)
+            if st == "paused":
+                GLib.timeout_add(300, lambda: (self.pause(), False)[1])
+
+    # ---------------------------------------------------------------- speed (C3-15)
+    def set_rate(self, rate):
+        self.rate = max(0.5, min(3.0, float(rate)))
+        self._seek_rate(self.cur)
+
+    def _seek_rate(self, pipe):
+        if self.state == "stopped":
+            return
+        ok, pos = pipe.pb.query_position(Gst.Format.TIME)
+        if not ok or pos < 0:
+            pos = 0
+        pipe.pb.seek(self.rate, Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
+                     Gst.SeekType.SET, pos, Gst.SeekType.NONE, -1)
 
     # ---------------------------------------------------------------- events
     def listen(self, fn):
@@ -207,6 +282,10 @@ class Engine:
                 self._emit("state", st)
             if new == Gst.State.PAUSED and old == Gst.State.READY:
                 self._start_at(pipe)
+                if (pipe.item or {}).get("_paused") and self.state == "loading":
+                    pipe.item["_paused"] = False
+                    self.state = "paused"
+                    self._emit("state", "paused")
         elif t == Gst.MessageType.BUFFERING and pipe is self.cur:
             pct = msg.parse_buffering()
             # a network stream waits while it fills up, then carries on
@@ -233,10 +312,18 @@ class Engine:
         self._apply_gain(self.cur)
         self._apply_eq()
         self.state = "loading"
-        self.cur.pb.set_state(Gst.State.PLAYING)
+        # a song brought back from last time waits, paused, at its place (C3-18)
+        self.cur.pb.set_state(Gst.State.PAUSED if item.get("_paused") else Gst.State.PLAYING)
         self._emit("track", item)
 
     def _start_at(self, pipe):
+        if self.rate != 1.0 and not (pipe.item or {}).get("stream") and not (pipe.item or {}).get("_rated"):
+            pipe.item["_rated"] = True
+            st0 = float(pipe.item.get("start") or 0)
+            pipe.item["_started"] = True
+            GLib.idle_add(lambda: (pipe.pb.seek(self.rate, Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
+                                                Gst.SeekType.SET, int(st0 * Gst.SECOND), Gst.SeekType.NONE, -1), False)[1])
+            return
         st = float((pipe.item or {}).get("start") or 0)
         if st > 0 and not pipe.item.get("_started"):
             pipe.item["_started"] = True
@@ -284,13 +371,23 @@ class Engine:
         return float((self.cur.item or {}).get("duration") or 0)
 
     def seek(self, secs):
-        self.cur.pb.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
-                                int(max(0, secs) * Gst.SECOND))
+        t = int(max(0, secs) * Gst.SECOND)
+        if self.rate != 1.0:        # keep the speed (a plain seek would set it back to 1x)
+            self.cur.pb.seek(self.rate, Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
+                             Gst.SeekType.SET, t, Gst.SeekType.NONE, -1)
+        else:
+            self.cur.pb.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, t)
 
     def set_volume(self, v):
         self.volume = max(0.0, min(1.0, v))
         for p in (self.a, self.b):
             self._apply_volume(p)
+
+    def set_balance(self, b):
+        self.balance = max(-1.0, min(1.0, float(b)))
+        for p in (self.a, self.b):
+            if p.pan is not None:
+                p.pan.set_property("panorama", self.balance)
 
     def _apply_volume(self, p):
         lin = GstAudio.stream_volume_convert_volume(GstAudio.StreamVolumeFormat.CUBIC,
@@ -306,10 +403,23 @@ class Engine:
         for p in (self.a, self.b):
             self._apply_gain(p)
 
+    def eq_for(self, item):
+        """(on, preamp, bands) for a song: its own preset from Get Info, else the Equalizer's."""
+        name = (item or {}).get("eq")
+        if name and self.auto_eq:
+            pr = self.preset_lookup(name)
+            if pr:
+                return True, float(pr[0]), list(pr[1])
+        return self.eq_on, float(self.eq[0]), list(self.eq[1])
+
     def _apply_eq(self):
         for p in (self.a, self.b):
-            for i in range(10):
-                p.eq.set_property("band%d" % i, float(self.eq[1][i]) if self.eq_on else 0.0)
+            self._apply_eq_pipe(p)
+
+    def _apply_eq_pipe(self, p):
+        on, _pa, bands = self.eq_for(p.item)
+        for i in range(10):
+            p.eq.set_property("band%d" % i, float(bands[i]) if on else 0.0)
 
     def set_sound_check(self, on):
         self.sound_check = bool(on)
@@ -322,11 +432,13 @@ class Engine:
             if self.sound_check and item.get("rg") is not None:
                 g += float(item["rg"])
             g += float(item.get("volume_adjust") or 0) * 0.12    # -100..100 % → about ±12 dB
-        if self.eq_on:
-            g += float(self.eq[0])
+        on, pa, _b = self.eq_for(item)
+        if on:
+            g += pa
         return g
 
     def _apply_gain(self, p):
+        self._apply_eq_pipe(p)
         db = self.gain_db(p.item)
         p.gain.set_property("volume", min(10.0, math.pow(10, db / 20.0)))
         self._apply_volume(p)

@@ -1,5 +1,5 @@
 Package: folio-chord
-Version: 0.1.1
+Version: 0.2.0
 Section: sound
 Priority: optional
 Architecture: all
@@ -14,4 +14,5 @@ Description: music player for music, internet radio and podcasts
  Mini Player, equalizer and visualizer. Internet radio comes from the
  radio-browser.info directory, podcasts from Apple's public podcast directory
  or Podcast Index. Audio CDs can be imported (with track names from
- MusicBrainz) and playlists burned to disc. No account is needed.
+ MusicBrainz) and playlists burned to disc. View > Look > Chordamp switches to
+ a classic small-player look with skins. No account is needed.

@@ -198,6 +198,8 @@ class InfoDialog(Dialog):
             self._summary_page()
         self._info_page()
         self._options_page()
+        if not self.multi:
+            self._lyrics_page()
         self._art_page()
         self.load()
 
@@ -267,7 +269,7 @@ class InfoDialog(Dialog):
         g.attach(lab("Equalizer Preset"), 0, 1, 1, 1)
         self.eq = Gtk.ComboBoxText()
         self.eq.append("", "None")
-        for p in sorted(player.PRESETS):
+        for p in self.win.app.eq_presets():
             self.eq.append(p, p)
         self.eq.connect("changed", lambda w: None if getattr(self, "_loading", False) else self.touched.add("eq"))
         g.attach(self.eq, 1, 1, 2, 1)
@@ -293,6 +295,17 @@ class InfoDialog(Dialog):
         g.attach(self.remember, 0, 5, 3, 1)
         g.attach(self.skip_shuffle, 0, 6, 3, 1)
         b.pack_start(g, False, False, 0)
+
+    def _lyrics_page(self):
+        b = self._page("Lyrics")
+        self.lyrics = Gtk.TextView()
+        self.lyrics.set_wrap_mode(Gtk.WrapMode.WORD)
+        self.lyrics.set_left_margin(6)
+        self.lyrics.get_buffer().connect("changed", lambda *_: None if getattr(self, "_loading", False) else self.touched.add("lyrics"))
+        sw = Gtk.ScrolledWindow()
+        sw.set_size_request(-1, 300)
+        sw.add(self.lyrics)
+        b.pack_start(sw, True, True, 0)
 
     def _art_page(self):
         b = self._page("Artwork")
@@ -345,6 +358,10 @@ class InfoDialog(Dialog):
             self.stop_e.set_text(views.fmt_time(r["stop_time"] or r["duration"]))
             pb = art.for_song(r["path"], 96) or art.placeholder(96, self.win.dark)
             self.sum_art.set_from_pixbuf(pb)
+            try:
+                self.lyrics.get_buffer().set_text(tags.lyrics(r["path"]))
+            except Exception:       # noqa: BLE001
+                self.lyrics.get_buffer().set_text("")
             self.sum_head.set_markup("<b>%s</b>\n%s\n%s\n<small>%s</small>" % tuple(GLib.markup_escape_text(x or "") for x in (
                 r["title"], r["artist"], r["album"], views.fmt_time(r["duration"]))))
             for c in self.sum_grid.get_children():
@@ -446,6 +463,9 @@ class InfoDialog(Dialog):
                     tags.write(r["path"], ch)
                 if self.new_art != "keep":
                     tags.set_artwork(r["path"], self.new_art)
+                if "lyrics" in self.touched and not self.multi:
+                    b = self.lyrics.get_buffer()
+                    tags.set_lyrics(r["path"], b.get_text(b.get_start_iter(), b.get_end_iter(), False))
                 if ch or self.new_art != "keep":
                     self.lib.add_file(r["path"])
             except Exception as e:      # noqa: BLE001
@@ -473,6 +493,187 @@ def get_info(win, ids):
 
 
 # ================================================================ Smart Playlist
+FIELDS_UI = [(label, col, kind) for label, col, kind in library.FIELDS]
+FIELDS_UI.insert([c for _l, c, _k in FIELDS_UI].index("play_count") + 1, ("Playlist", "playlist", "playlist"))
+
+
+class RuleGroup:
+    """A group of Smart Playlist rules; a rule's “…” button adds a nested group (C3-22)."""
+
+    def __init__(self, dlg, rules, depth, match="all"):
+        self.dlg = dlg
+        self.depth = depth
+        self.items = []
+        self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        if depth:
+            head = Gtk.Box(spacing=6)
+            self.match = Gtk.ComboBoxText()
+            self.match.append("all", "all")
+            self.match.append("any", "any")
+            self.match.set_active_id(match)
+            head.pack_start(lab("Match", 0), False, False, 0)
+            head.pack_start(self.match, False, False, 0)
+            head.pack_start(lab("of the following:", 0), False, False, 0)
+            self.box.pack_start(head, False, False, 0)
+            self.box.set_margin_start(24)
+        for r in rules:
+            if isinstance(r, dict):
+                self.add_group(r)
+            else:
+                self.add_rule(r)
+
+    def _place(self, item, after):
+        if after is not None and after in self.items:
+            self.items.insert(self.items.index(after) + 1, item)
+        else:
+            self.items.append(item)
+        self.box.pack_start(item["row"], False, False, 0)
+        self.box.reorder_child(item["row"], self.items.index(item) + (1 if self.depth else 0))
+        item["row"].show_all()
+
+    def add_group(self, spec=None, after=None):
+        spec = spec or {"match": "any", "rules": [["artist", "contains", ""]]}
+        g = RuleGroup(self.dlg, spec.get("rules") or [["artist", "contains", ""]], self.depth + 1, spec.get("match", "any"))
+        frame = Gtk.Frame()
+        inner = Gtk.Box(spacing=4)
+        inner.set_border_width(4)
+        inner.pack_start(g.box, True, True, 0)
+        rm = Gtk.Button(label="−")
+        rm.set_valign(Gtk.Align.START)
+        inner.pack_end(rm, False, False, 0)
+        frame.add(inner)
+        item = {"type": "group", "row": frame, "group": g}
+        rm.connect("clicked", lambda *_: self.remove(item))
+        self._place(item, after)
+        return g
+
+    def remove(self, item):
+        if len(self.items) <= 1 and self.depth == 0:
+            return
+        self.items.remove(item)
+        self.box.remove(item["row"])
+
+    def add_rule(self, r=None, after=None):
+        r = list(r or ["artist", "contains", ""])
+        row = Gtk.Box(spacing=4)
+        field = Gtk.ComboBoxText()
+        for label, col, _k in FIELDS_UI:
+            field.append(col, label)
+        op = Gtk.ComboBoxText()
+        v1 = Gtk.Entry(width_chars=16)
+        v2 = Gtk.Entry(width_chars=8)
+        unit = Gtk.ComboBoxText()
+        for u in ("days", "weeks", "months"):
+            unit.append(u, u)
+        rating = Gtk.ComboBoxText()
+        for n in range(6):
+            rating.append(str(n * 20), "★" * n if n else "none")
+        plist = Gtk.ComboBoxText()
+        for p in self.dlg.win.lib.playlists():
+            plist.append(str(p["id"]), p["name"])
+        add = Gtk.Button(label="+")
+        add.set_tooltip_text("Add a rule")
+        nest = Gtk.Button(label="…")
+        nest.set_tooltip_text("Add a group of rules (any or all of them)")
+        rm = Gtk.Button(label="−")
+        rec = {"type": "rule", "row": row, "field": field, "op": op, "v1": v1, "v2": v2, "unit": unit, "rating": rating,
+               "playlist": plist}
+
+        def kind():
+            col = field.get_active_id()
+            return "playlist" if col == "playlist" else library.FIELD.get(col, ("", "text"))[1]
+
+        def refill_ops(keep=None):
+            op.remove_all()
+            for o in (["is", "is not"] if kind() == "playlist" else library.OPS[kind()]):
+                op.append(o, o)
+            if not op.set_active_id(keep or ""):
+                op.set_active(0)
+            show()
+
+        def show(*_):
+            k, o = kind(), op.get_active_id() or ""
+            v1.set_visible(k in ("text", "number", "date"))
+            rating.set_visible(k == "rating")
+            plist.set_visible(k == "playlist")
+            v2.set_visible(o == "is in the range" and k in ("number",))
+            unit.set_visible(k == "date" and o in ("is in the last", "is not in the last"))
+        field.connect("changed", lambda *_: refill_ops())
+        op.connect("changed", show)
+        add.connect("clicked", lambda *_: self.add_rule(None, rec))
+        nest.connect("clicked", lambda *_: self.add_group(None, rec))
+        rm.connect("clicked", lambda *_: self.remove(rec))
+        for w in (field, op, v1, rating, plist, v2, unit):
+            row.pack_start(w, False, False, 0)
+        row.pack_end(rm, False, False, 0)
+        row.pack_end(nest, False, False, 0)
+        row.pack_end(add, False, False, 0)
+        field.set_active_id(r[0])
+        refill_ops(r[1])
+        k = kind()
+        if k == "rating":
+            rating.set_active_id(str(int(r[2] or 0)) if len(r) > 2 else "0")
+            if rating.get_active_id() is None:
+                rating.set_active(0)
+        elif k == "playlist":
+            if not (len(r) > 2 and plist.set_active_id(str(r[2]))):
+                plist.set_active(0)
+        elif len(r) > 2:
+            v1.set_text("" if r[2] is None else (time.strftime("%Y-%m-%d", time.localtime(r[2]))
+                                                  if k == "date" and r[1] in ("is after", "is before") else str(r[2])))
+        if len(r) > 3:
+            if k == "date":
+                unit.set_active_id(r[3])
+            else:
+                v2.set_text(str(r[3]))
+        if unit.get_active_id() is None:
+            unit.set_active_id("days")
+        self._place(rec, after)
+        show()
+        return rec
+
+    def rules(self):
+        out = []
+        for it in self.items:
+            if it["type"] == "group":
+                g = it["group"]
+                out.append({"match": g.match.get_active_id() or "all", "rules": g.rules()})
+                continue
+            rec = it
+            col, o = rec["field"].get_active_id(), rec["op"].get_active_id()
+            if col == "playlist":
+                out.append([col, o, int(rec["playlist"].get_active_id() or 0)])
+                continue
+            k = library.FIELD[col][1]
+            if k == "text":
+                out.append([col, o, rec["v1"].get_text()])
+            elif k == "number":
+                def num(e):
+                    try:
+                        return float(e.get_text() or 0)
+                    except ValueError:
+                        return 0
+                out.append([col, o, num(rec["v1"])] + ([num(rec["v2"])] if o == "is in the range" else []))
+            elif k == "rating":
+                out.append([col, o, int(rec["rating"].get_active_id() or 0)])
+            elif k == "date":
+                if o in ("is in the last", "is not in the last"):
+                    try:
+                        n = float(rec["v1"].get_text() or 0)
+                    except ValueError:
+                        n = 0
+                    out.append([col, o, n, rec["unit"].get_active_id() or "days"])
+                else:
+                    try:
+                        t = time.mktime(time.strptime(rec["v1"].get_text().strip(), "%Y-%m-%d"))
+                    except ValueError:
+                        t = 0
+                    out.append([col, o, t])
+            else:
+                out.append([col, o])
+        return out
+
+
 class SmartDialog(Dialog):
     def __init__(self, win, spec):
         super().__init__(win, "Smart Playlist")
@@ -494,11 +695,9 @@ class SmartDialog(Dialog):
         m.pack_start(self.match, False, False, 0)
         m.pack_start(lab("of the following rules:", 0), False, False, 0)
         self.body.pack_start(m, False, False, 0)
-        self.rules_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.body.pack_start(self.rules_box, False, False, 0)
-        self.rule_rows = []
-        for r in spec.get("rules") or [["artist", "contains", ""]]:
-            self.add_rule(r)
+        self.top = RuleGroup(self, spec.get("rules") or [["artist", "contains", ""]], 0)
+        self.rules_box = self.top.box
+        self.body.pack_start(self.top.box, False, False, 0)
         lim = Gtk.Box(spacing=6)
         self.use_limit = Gtk.CheckButton(label="Limit to")
         self.limit_n = Gtk.SpinButton.new_with_range(1, 100000, 1)
@@ -524,115 +723,21 @@ class SmartDialog(Dialog):
         self.live.set_sensitive(False)
         self.body.pack_start(self.live, False, False, 0)
 
+    @property
+    def rule_rows(self):
+        return [it for it in self.top.items if it["type"] == "rule"]
+
     def add_rule(self, r=None, after=None):
-        r = list(r or ["artist", "contains", ""])
-        row = Gtk.Box(spacing=4)
-        field = Gtk.ComboBoxText()
-        for label, col, _k in library.FIELDS:
-            field.append(col, label)
-        op = Gtk.ComboBoxText()
-        v1 = Gtk.Entry(width_chars=16)
-        v2 = Gtk.Entry(width_chars=8)
-        unit = Gtk.ComboBoxText()
-        for u in ("days", "weeks", "months"):
-            unit.append(u, u)
-        rating = Gtk.ComboBoxText()
-        for n in range(6):
-            rating.append(str(n * 20), "★" * n if n else "none")
-        add = Gtk.Button(label="+")
-        rm = Gtk.Button(label="−")
-        rec = {"row": row, "field": field, "op": op, "v1": v1, "v2": v2, "unit": unit, "rating": rating}
+        return self.top.add_rule(r, after)
 
-        def kind():
-            return library.FIELD.get(field.get_active_id(), ("", "text"))[1]
-
-        def refill_ops(keep=None):
-            op.remove_all()
-            for o in library.OPS[kind()]:
-                op.append(o, o)
-            if not op.set_active_id(keep or ""):
-                op.set_active(0)
-            show()
-
-        def show(*_):
-            k, o = kind(), op.get_active_id() or ""
-            v1.set_visible(k in ("text", "number", "date"))
-            rating.set_visible(k == "rating")
-            v2.set_visible(o == "is in the range" and k in ("number",))
-            unit.set_visible(k == "date" and o in ("is in the last", "is not in the last"))
-        field.connect("changed", lambda *_: refill_ops())
-        op.connect("changed", show)
-        add.connect("clicked", lambda *_: self.add_rule(None, rec))
-        rm.connect("clicked", lambda *_: self.remove_rule(rec))
-        for w in (field, op, v1, rating, v2, unit):
-            row.pack_start(w, False, False, 0)
-        row.pack_end(rm, False, False, 0)
-        row.pack_end(add, False, False, 0)
-        field.set_active_id(r[0])
-        refill_ops(r[1])
-        k = kind()
-        if k == "rating":
-            rating.set_active_id(str(int(r[2] or 0)) if len(r) > 2 else "0")
-            if rating.get_active_id() is None:
-                rating.set_active(0)
-        elif len(r) > 2:
-            v1.set_text("" if r[2] is None else (time.strftime("%Y-%m-%d", time.localtime(r[2]))
-                                                  if k == "date" and r[1] in ("is after", "is before") else str(r[2])))
-        if len(r) > 3:
-            if k == "date":
-                unit.set_active_id(r[3])
-            else:
-                v2.set_text(str(r[3]))
-        if unit.get_active_id() is None:
-            unit.set_active_id("days")
-        if after is not None and after in self.rule_rows:
-            i = self.rule_rows.index(after) + 1
-            self.rule_rows.insert(i, rec)
-        else:
-            self.rule_rows.append(rec)
-        self.rules_box.pack_start(row, False, False, 0)
-        self.rules_box.reorder_child(row, self.rule_rows.index(rec))
-        row.show_all()
-        show()
-        return rec
+    def add_group(self, spec=None, after=None):
+        return self.top.add_group(spec, after)
 
     def remove_rule(self, rec):
-        if len(self.rule_rows) <= 1:
-            return
-        self.rule_rows.remove(rec)
-        self.rules_box.remove(rec["row"])
+        self.top.remove(rec)
 
     def spec(self):
-        rules = []
-        for rec in self.rule_rows:
-            col, o = rec["field"].get_active_id(), rec["op"].get_active_id()
-            k = library.FIELD[col][1]
-            if k == "text":
-                rules.append([col, o, rec["v1"].get_text()])
-            elif k == "number":
-                def num(e):
-                    try:
-                        return float(e.get_text() or 0)
-                    except ValueError:
-                        return 0
-                rules.append([col, o, num(rec["v1"])] + ([num(rec["v2"])] if o == "is in the range" else []))
-            elif k == "rating":
-                rules.append([col, o, int(rec["rating"].get_active_id() or 0)])
-            elif k == "date":
-                if o in ("is in the last", "is not in the last"):
-                    try:
-                        n = float(rec["v1"].get_text() or 0)
-                    except ValueError:
-                        n = 0
-                    rules.append([col, o, n, rec["unit"].get_active_id() or "days"])
-                else:
-                    try:
-                        t = time.mktime(time.strptime(rec["v1"].get_text().strip(), "%Y-%m-%d"))
-                    except ValueError:
-                        t = 0
-                    rules.append([col, o, t])
-            else:
-                rules.append([col, o])
+        rules = self.top.rules()
         out = {"name": self.name.get_text().strip() or "untitled playlist", "match": self.match.get_active_id(),
                "rules": rules if self.use_match.get_active() else [],
                "checked_only": self.checked.get_active()}
@@ -750,6 +855,9 @@ class OptionsDialog(Dialog):
         self.sc = Gtk.CheckButton(label="Sound Check (plays songs at the same volume, from their ReplayGain)")
         self.sc.set_active(s["sound_check"])
         p.pack_start(self.sc, False, False, 0)
+        self.resume = Gtk.CheckButton(label="Carry on where I left off when Folio Chord opens")
+        self.resume.set_active(s.get("resume", True))
+        p.pack_start(self.resume, False, False, 0)
         # ---- Podcasts
         q = page("Podcasts")
         gq = grid()
@@ -834,6 +942,7 @@ class OptionsDialog(Dialog):
         s["crossfade"] = self.xfade.get_active()
         s["crossfade_secs"] = int(self.xfade_s.get_value())
         s["sound_check"] = self.sc.get_active()
+        s["resume"] = self.resume.get_active()
         s["podcast_refresh"] = self.refresh.get_active_id()
         s["podcast_new"] = self.new.get_active_id()
         s["podcast_keep"] = self.keep.get_active_id()
@@ -846,6 +955,8 @@ class OptionsDialog(Dialog):
         pb = win.app.playback
         pb.engine.crossfade = float(s["crossfade_secs"]) if s["crossfade"] else 0.0
         pb.engine.set_sound_check(s["sound_check"])
+        if s["sound_check"]:
+            win.app.analyser.start()      # C3-16: measure the songs that have no ReplayGain
         if old != set(new):
             win.rescan()
 

@@ -8,6 +8,7 @@ of MP3, MP4/M4A (AAC, ALAC), FLAC, Ogg Vorbis, Opus, WAV and AIFF files, through
   write(path, changes)    changes: the same keys; "" or None clears one
   artwork(path)           (bytes, mime) or None
   set_artwork(path, data, mime)   data None removes it
+  lyrics(path) / set_lyrics(path, text)   the song's lyrics (C3-19)
 """
 import base64
 import os
@@ -369,4 +370,50 @@ def set_artwork(path, data, mime="image/jpeg"):
                     del t[nm]
             if data is not None:
                 t["METADATA_BLOCK_PICTURE"] = [base64.b64encode(p.write()).decode("ascii")]
+    f.save()
+
+
+def lyrics(path):
+    """The lyrics kept in the file ("" when there are none)."""
+    f = _open(path)
+    if f is None or f.tags is None:
+        return ""
+    t = f.tags
+    if hasattr(t, "getall"):
+        for u in t.getall("USLT"):
+            if u.text:
+                return str(u.text)
+        return ""
+    if type(f).__name__ == "MP4":
+        return _first(t.get("\xa9lyr") or "")
+    for nm in ("LYRICS", "UNSYNCEDLYRICS", "lyrics", "unsyncedlyrics"):
+        if t.get(nm):
+            return _first(t[nm])
+    return ""
+
+
+def set_lyrics(path, text):
+    f = _open(path)
+    if f is None:
+        raise ValueError("not an audio file: %s" % path)
+    if f.tags is None:
+        f.add_tags()
+    t = f.tags
+    text = (text or "").strip()
+    if hasattr(t, "getall"):
+        from mutagen import id3
+        t.delall("USLT")
+        if text:
+            t.add(id3.USLT(encoding=3, lang="eng", desc="", text=text))
+    elif type(f).__name__ == "MP4":
+        if text:
+            t["\xa9lyr"] = [text]
+        else:
+            t.pop("\xa9lyr", None)
+    else:
+        for nm in ("LYRICS", "UNSYNCEDLYRICS", "lyrics", "unsyncedlyrics"):
+            if nm in t:
+                del t[nm]
+        if text:
+            t["LYRICS"] = [text]
     f.save()
