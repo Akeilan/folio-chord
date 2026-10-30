@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#define CHORD_VERSION L"0.3.0"
+#define CHORD_VERSION L"0.4.0"
 
 // window messages the background work posts back to the window
 #define WM_CHORD_PLAYER   (WM_APP + 1)   // wParam: player event
