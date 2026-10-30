@@ -8,6 +8,7 @@ Add Folder to Library…	add-folder	ok
 Check Music Folders Again	rescan	ok
 Import Playlist…	import-playlist	ok
 Export Playlist…	export-playlist	ok
+Import iTunes Library…	import-itunes	ok
 Sync	na:Sync	“Sync” isn't available in Folio Chord.
 Back Up	na:Back Up	“Back Up” isn't available in Folio Chord.
 Subscribe to Podcast…	subscribe	ok
@@ -35,12 +36,19 @@ Options…	options	ok
 as List	view:list	ok
 as Album List	view:albums	ok
 as Grid	view:grid	ok
+as Cover Flow	view:coverflow	ok
+Show Duplicate Items	duplicates:name	ok
+Show Exact Duplicate Items	duplicates:exact	ok
+Show All Items	duplicates:off	ok
+Show/Hide Lyrics	toggle-lyrics	ok
 Show/Hide Column Browser	toggle-browser	ok
 Show/Hide Artwork	toggle-artwork	ok
 Show Up Next	up-next	ok
 Show Visualizer	visualizer	ok
 Switch to Mini Player	mini-player	ok
 Full Screen	fullscreen	ok
+Standard	look:standard	ok
+Chordamp	look:classic	ok
 Play/Pause	play-pause	ok
 Stop	stop	ok
 Next	next	ok
@@ -49,6 +57,24 @@ Go to Current Song	go-current	ok
 Increase Volume	volume-up	ok
 Decrease Volume	volume-down	ok
 Mute	mute	ok
+Skip Back 15 Seconds	skip:-15	ok
+Skip Forward 30 Seconds	skip:30	ok
+0.5×	speed:0.5	Playback speed is for podcast episodes.
+0.75×	speed:0.75	Playback speed is for podcast episodes.
+1×	speed:1	Playback speed is for podcast episodes.
+1.25×	speed:1.25	Playback speed is for podcast episodes.
+1.5×	speed:1.5	Playback speed is for podcast episodes.
+1.75×	speed:1.75	Playback speed is for podcast episodes.
+2×	speed:2	Playback speed is for podcast episodes.
+2.5×	speed:2.5	Playback speed is for podcast episodes.
+3×	speed:3	Playback speed is for podcast episodes.
+Off	sleep:0	ok
+In 15 Minutes	sleep:15	ok
+In 30 Minutes	sleep:30	ok
+In 45 Minutes	sleep:45	ok
+In 1 Hour	sleep:60	ok
+In 90 Minutes	sleep:90	ok
+At the End of This Song or Episode	sleep:-1	ok
 Shuffle On/Off	shuffle	ok
 By Songs	shuffle-by:songs	ok
 By Albums	shuffle-by:albums	ok
@@ -65,6 +91,7 @@ Authorize This Computer…	na:Authorize This Computer	“Authorize This Computer
 Check for Available Downloads…	na:Check for Available Downloads	“Check for Available Downloads” isn't available in Folio Chord.
 Turn On Match	na:Match	“Match” isn't available in Folio Chord.
 Open Stream…	open-stream	ok
+Add Stream to Favourites…	add-stream	ok
 Subscribe to Podcast…	subscribe	ok
 Refresh All Podcasts	refresh-podcasts	ok
 Import CD	import-cd	There's no audio CD in the drive.
@@ -74,9 +101,12 @@ Create MP3 Version	convert:MP3	ok
 Create FLAC Version	convert:FLAC	ok
 Create Apple Lossless Version	convert:Apple Lossless	ok
 Get Album Artwork	get-artwork	Artwork was found for 0 of 1 albums.
+Organize Music Folder…	organize	ok
+Undo Organize Music Folder	undo-organize	There's no Organize Music Folder to undo.
 Minimize	minimize	skipped (closes the window)
 Zoom	zoom	ok
 Equalizer	equalizer	ok
+Sound Output…	outputs	ok
 Folio Chord	front	ok
 Keyboard Shortcuts	shortcuts	ok
 About Folio Chord	about	ok

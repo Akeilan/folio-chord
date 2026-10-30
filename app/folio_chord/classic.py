@@ -390,7 +390,7 @@ class MainWindow(SkinWindow):
             if pb.engine.state != "stopped":
                 t = views.fmt_time(pos)
                 cr.save()
-                plain_text(cr, t, 127, 2.5, sk.lcd if sk.text_font is None else sk.pl["normal"], 7)
+                plain_text(cr, t, 127, 1.5, sk.lcd if sk.text_font is None else sk.pl["normal"], 8)
                 cr.restore()
                 if dur > 0:
                     cr.set_source_rgb(*sk.pl["normal"])
@@ -484,9 +484,9 @@ class MainWindow(SkinWindow):
             bitmap_text(sk, cr, s, x, y, w)
         else:
             cr.save()
-            cr.rectangle(x - 1, y - 2, w + 4, 10)
+            cr.rectangle(x - 1, y - 3, w + 6, 12)
             cr.clip()
-            plain_text(cr, s, x - 1, y - 2.5, sk.lcd, 7)
+            plain_text(cr, s, x - 1, y - 3, sk.lcd, 8)
             cr.restore()
 
     def _title_text(self, cr):
@@ -497,7 +497,7 @@ class MainWindow(SkinWindow):
         if not text:
             return
         cr.save()
-        cr.rectangle(111, 27, 154, 6 if sk.text_font else 9)
+        cr.rectangle(111, 24 if not sk.text_font else 27, 154, 6 if sk.text_font else 12)
         cr.clip()
         if sk.text_font:
             full = text + "  ***  "
@@ -508,14 +508,14 @@ class MainWindow(SkinWindow):
                 off = self.marquee % tw
                 bitmap_text(sk, cr, full + full, 111 - off, 27)
         else:
-            tw0 = text_width(cr, text, 7.5)
+            tw0 = text_width(cr, text, 8.5)
             if tw0 <= 152:
-                plain_text(cr, text, 112, 24.5, sk.lcd, 7.5)
+                plain_text(cr, text, 112, 24, sk.lcd, 8.5)
             else:
                 full = text + "   ***   "
-                tw = text_width(cr, full, 7.5)
+                tw = text_width(cr, full, 8.5)
                 off = self.marquee % max(1, tw)
-                plain_text(cr, full + full, 112 - off, 24.5, sk.lcd, 7.5)
+                plain_text(cr, full + full, 112 - off, 24, sk.lcd, 8.5)
         cr.restore()
 
     def tick(self):
@@ -700,7 +700,7 @@ class EqWindow(SkinWindow):
 # ======================================================================== the playlist editor
 class PlaylistWindow(SkinWindow):
     name = "pl"
-    ROW = 13
+    ROW = 14
 
     def __init__(self, ca):
         self.top = 0
@@ -865,15 +865,15 @@ class PlaylistWindow(SkinWindow):
             col = sk.pl["current"] if i == cur else sk.pl["normal"]
             name = "%d. %s" % (i + 1, item_name(ca, items[i]))
             length = views.fmt_time(item_length(ca, items[i]))
-            lw = text_width(cr, length, 8, font=font)
+            lw = text_width(cr, length, 9, font=font)
             cr.save()
             cr.rectangle(12, yy, w - 32 - lw - 8, self.ROW)
             cr.clip()
-            plain_text(cr, name, 14, yy, col, 8, font=font)
+            plain_text(cr, name, 14, yy, col, 9, font=font)
             cr.restore()
-            plain_text(cr, length, w - 22 - lw, yy, col, 8, font=font)
+            plain_text(cr, length, w - 22 - lw, yy, col, 9, font=font)
         if not items and ca.pb.now and ca.pb.now.get("kind") == "station":
-            plain_text(cr, "1. " + (ca.pb.now.get("title") or ""), 14, 22, sk.pl["current"], 8, font=font)
+            plain_text(cr, "1. " + (ca.pb.now.get("title") or ""), 14, 22, sk.pl["current"], 9, font=font)
         cr.restore()
         # scroll thumb
         n = len(items)
@@ -885,9 +885,9 @@ class PlaylistWindow(SkinWindow):
         sel_total = sum(item_length(ca, items[i]) for i in self.sel if i < n)
         info = "%s/%s" % (views.fmt_time(sel_total), views.fmt_time(total))
         cr.save()
-        cr.rectangle(w - 143, h - 28, 90, 10)
+        cr.rectangle(w - 143, h - 29, 90, 12)
         cr.clip()
-        plain_text(cr, info, w - 141, h - 29, sk.pl["normal"], 7.5, font=font)
+        plain_text(cr, info, w - 141, h - 29.5, sk.pl["normal"], 8.5, font=font)
         cr.restore()
         self.rows_cache = items
 
