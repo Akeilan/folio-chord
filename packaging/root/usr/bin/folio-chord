@@ -1,0 +1,5 @@
+#!/bin/sh
+# Folio Chord: music, internet radio and podcasts
+export PYTHONPATH="/usr/lib/folio-chord${PYTHONPATH:+:$PYTHONPATH}"
+export FOLIO_CHORD_SHARE="${FOLIO_CHORD_SHARE:-/usr/share/folio-chord}"
+exec "${FOLIO_PYTHON:-/usr/bin/python3}" -m folio_chord "$@"

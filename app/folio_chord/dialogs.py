@@ -1096,7 +1096,7 @@ def about(win, version):
     t.set_justify(Gtk.Justification.CENTER)
     d.body.pack_start(t, False, False, 0)
     x = Gtk.Label(label="Music, internet radio and podcasts.\nStations from radio-browser.info; podcasts from Apple's "
-                        "public podcast directory or Podcast Index;\nCD track names from MusicBrainz. Nothing else leaves "
+                        "public podcast directory or Podcast Index;\nCD names and album covers from MusicBrainz. Nothing else leaves "
                         "this computer.")
     x.set_justify(Gtk.Justification.CENTER)
     x.get_style_context().add_class("chord-dim")

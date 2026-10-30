@@ -4,6 +4,7 @@ Podcast Index, two podcast feeds with their episode files, and a radio stream (a
   s = Stub(audio_file); s.base -> "http://127.0.0.1:port"; s.hits -> [(path, query, headers)]
 """
 import hashlib
+import os
 import http.server
 import json
 import threading
@@ -184,6 +185,11 @@ class Stub:
                 return b'{"status":"false"}', "application/json", 401
             return self.j({"feeds": [{"id": 77, "title": "Tech Show", "author": "Tech Media", "url": b + "/feed/tech",
                                       "artwork": b + "/art/tech.png", "categories": {"102": "Technology"}, "episodeCount": 3}]})
+        if path == "/mb/release/":
+            ok = "Night Sessions" in q.get("query", "")
+            return self.j({"releases": [{"id": "rel-1", "score": 100}] if ok else []})
+        if path == "/caa/release/rel-1/front-500":
+            return open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "art.png"), "rb").read(), "image/png", 200
         if path.startswith("/mb/discid/"):
             if path.endswith("/unknown"):
                 return self.j({"releases": []})
