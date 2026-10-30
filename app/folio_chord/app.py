@@ -25,6 +25,8 @@ DEFAULTS = {
     "podcast_refresh": "hour", "podcast_new": "recent", "podcast_keep": "all",
     "podcast_directory": "apple", "podcastindex_key": "", "podcastindex_secret": "", "podcast_country": "",
     "radio_country": "", "burn_gap": 2, "burn_kind": "audio", "copy_to_media": False,
+    "eq_custom": {}, "output": "", "resume": True, "look": "standard", "skin": "", "classic_double": False,
+    "classic_eq": True, "classic_pl": True, "classic_ontop": False, "classic_vis": "spectrum", "eq_auto": True, "balance": 0.0, "classic_pos": {}, "classic_shade": False,
 }
 
 
@@ -85,8 +87,12 @@ class Playback:
         self.engine.set_sound_check(s["sound_check"])
         self.engine.crossfade = float(s["crossfade_secs"]) if s["crossfade"] else 0.0
         self.engine.set_eq(s["eq_on"], s["eq_preamp"], s["eq_bands"])
+        self.engine.auto_eq = bool(s.get("eq_auto", True))
+        self.engine.set_balance(float(s.get("balance", 0.0)))
         self.queue.shuffle, self.queue.shuffle_by, self.queue.repeat = s["shuffle"], s["shuffle_by"], s["repeat"]
         self.muted_from = None
+        self.sleep_at = None
+        self.sleep_end_of_item = False
         GLib.timeout_add_seconds(5, self._save_position)
 
     def listen(self, fn):
@@ -105,9 +111,13 @@ class Playback:
         r = self.lib.track(tid)
         if r is None:
             return None
+        start = r["start_time"] or 0
+        if r["remember_position"] and (r["position"] or 0) > 5 and (r["position"] or 0) < (r["duration"] or 0) - 5:
+            start = r["position"]       # C3-13: carry on where it was left
         return {"kind": "song", "id": tid, "uri": player.uri_of(r["path"]), "title": r["title"], "artist": r["artist"],
-                "album": r["album"], "duration": r["duration"], "rg": r["rg_track"], "start": r["start_time"] or 0,
-                "stop": r["stop_time"] or 0, "volume_adjust": r["volume_adjust"] or 0, "path": r["path"]}
+                "album": r["album"], "duration": r["duration"], "rg": r["rg_track"], "start": start,
+                "stop": r["stop_time"] or 0, "volume_adjust": r["volume_adjust"] or 0, "path": r["path"],
+                "eq": r["eq"] or ""}
 
     def episode_item(self, eid):
         e = self.app.pods.episode(eid)
@@ -141,16 +151,29 @@ class Playback:
         self._start(self.episode_item(eids[index]))
 
     def play_station(self, st):
+        if radio.looks_like_playlist(st.get("url", "")):
+            radio.played(self.lib, st)
+            return self.play_uri(st["url"], st.get("name"))
         self.queue.start([], 0)
         radio.played(self.lib, st)
         self._start(self.station_item(st))
         from . import net
         net.in_thread(lambda: self.app.radio.clicked(st))
 
-    def play_uri(self, uri):
+    def play_uri(self, uri, name=None):
+        """Play an internet stream; a station playlist (.pls, .m3u, .asx) is opened for its stream (C3-17)."""
         self.queue.start([], 0)
-        self._start({"kind": "station", "id": uri, "uri": uri, "title": uri, "artist": "", "album": "", "duration": 0,
-                     "stream": True, "station": {"uuid": "", "name": uri, "url": uri, "tags": []}})
+        st = radio.custom_station(name or uri, uri)
+
+        def go(real):
+            item = self.station_item(st)
+            item["uri"] = real
+            self._start(item)
+        if radio.looks_like_playlist(uri):
+            from . import net
+            net.in_thread(lambda: radio.resolve(uri), go, lambda e: self._emit("error", "“%s” couldn't be opened: %s" % (uri, e)))
+        else:
+            go(uri)
 
     def _item_for(self, key):
         if isinstance(key, tuple) and key[0] == "e":
@@ -165,7 +188,53 @@ class Playback:
         if item is None:
             return
         self.stream_title = ""
+        self.engine.rate = self.rate_for(item)
         self.engine.play(item, self._next_item)
+
+    # ---------------------------------------------------------------- C3-15: speed, skips, sleep timer
+    SPEEDS = (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+
+    def rate_for(self, item):
+        if item and item.get("kind") == "episode":
+            e = self.app.pods.episode(item["id"])
+            p = self.app.pods.show(e["podcast"]) if e else None
+            return float(p["speed"] or 1.0) if p else 1.0
+        return 1.0
+
+    def set_speed(self, rate):
+        n = self.now
+        if n and n.get("kind") == "episode":
+            e = self.app.pods.episode(n["id"])
+            if e:
+                self.app.pods.set_speed(e["podcast"], rate)
+        self.engine.set_rate(rate if n and n.get("kind") == "episode" else 1.0)
+        self._emit("speed", self.engine.rate)
+
+    def skip(self, secs):
+        if self.engine.state == "stopped" or (self.now or {}).get("stream") and not (self.now or {}).get("duration"):
+            return
+        pos = self.engine.position() + secs
+        dur = self.engine.duration()
+        self.engine.seek(max(0.0, min(pos, dur - 1 if dur else pos)))
+
+    def sleep_in(self, minutes):
+        """Stop after this many minutes; 0 cancels; -1 stops at the end of the current song or episode."""
+        if getattr(self, "_sleep", None):
+            GLib.source_remove(self._sleep)
+        self._sleep = None
+        self.sleep_at = None
+        self.sleep_end_of_item = minutes == -1
+        if minutes and minutes > 0:
+            self.sleep_at = time.time() + minutes * 60
+            self._sleep = GLib.timeout_add_seconds(int(minutes * 60), self._sleep_now)
+        self._emit("sleep", minutes)
+
+    def _sleep_now(self):
+        self._sleep = None
+        self.sleep_at = None
+        self.stop()
+        self._emit("sleep", 0)
+        return False
 
     def toggle(self):
         if self.engine.state in ("playing", "paused"):
@@ -239,6 +308,9 @@ class Playback:
             self.started_at = time.time()
             self.stream_title = ""
         elif ev == "eos" and val:
+            if getattr(self, "sleep_end_of_item", False):
+                self.sleep_end_of_item = False
+                GLib.idle_add(lambda: (self.stop(), self._emit("sleep", 0), False)[2])
             if val.get("kind") == "song":
                 self.lib.played(val["id"])
             elif val.get("kind") == "episode":
@@ -255,6 +327,57 @@ class Playback:
             return
         self._emit(ev, val)
 
+    # ---------------------------------------------------------------- C3-18: carry on where you left off
+    def session(self):
+        q = self.queue
+        enc = lambda k: ["e", k[1]] if isinstance(k, tuple) else k  # noqa: E731
+        n = self.now
+        now = None
+        if n:
+            now = {"kind": n["kind"], "id": n["id"]}
+            if n["kind"] == "station":
+                now["station"] = n.get("station")
+                now["uri"] = n.get("uri")
+        return {"source": [enc(k) for k in q.source], "order": q.order, "pos": q.pos, "up_next": [enc(k) for k in q.up_next],
+                "current": enc(q.current) if q.current is not None else None, "now": now,
+                "position": self.engine.position() if self.engine.state in ("playing", "paused") else 0.0}
+
+    def save_session(self):
+        try:
+            self.lib.put("session", json.dumps(self.session()))
+        except Exception:       # noqa: BLE001
+            pass
+
+    def restore_session(self):
+        try:
+            d = json.loads(self.lib.get("session") or "null")
+        except ValueError:
+            d = None
+        if not d or not d.get("now"):
+            return False
+        dec = lambda k: ("e", k[1]) if isinstance(k, list) else k  # noqa: E731
+        q = self.queue
+        q.source = [dec(k) for k in d.get("source", [])]
+        q.order = d.get("order") or list(range(len(q.source)))
+        q.pos = d.get("pos", -1)
+        q.up_next = [dec(k) for k in d.get("up_next", [])]
+        q.current = dec(d["current"]) if d.get("current") is not None else None
+        n = d["now"]
+        if n["kind"] == "station" and n.get("station"):
+            item = self.station_item(n["station"])
+            item["uri"] = n.get("uri") or item["uri"]
+            self.now = item
+            self._emit("track", item)
+            self._emit("state", "stopped")
+            return True
+        item = self._item_for(("e", n["id"]) if n["kind"] == "episode" else n["id"])
+        if item is None:
+            return False
+        item["start"] = float(d.get("position") or 0)
+        item["_paused"] = True
+        self._start(item)
+        return True
+
     def _save_position(self):
         n = self.now
         if n and n.get("kind") == "episode" and self.engine.state in ("playing", "paused"):
@@ -264,7 +387,10 @@ class Playback:
         elif n and n.get("kind") == "song" and self.engine.state in ("playing", "paused"):
             r = self.lib.track(n["id"])
             if r and r["remember_position"]:
-                self.lib.update([n["id"]], position=self.engine.position())
+                with self.lib.lock:
+                    self.lib.db.execute("update tracks set position=? where id=?", (self.engine.position(), n["id"]))
+                    self.lib.db.commit()
+        self.save_session()
         return True
 
 
@@ -296,6 +422,17 @@ class ChordApp(Gtk.Application):
         self.pods = podcasts.Podcasts(self.lib, os.path.join(self.media_folder(), "Podcasts"))
         self.radio = radio.Directory()
         self.playback = Playback(self)
+        self.playback.engine.preset_lookup = self.eq_preset
+        if self.settings.get("output"):
+            for name, dev in player.Engine.devices():
+                if name == self.settings["output"]:
+                    self.playback.engine.output = dev
+                    for p in (self.playback.engine.a, self.playback.engine.b):
+                        p.pb.set_property("audio-sink", self.playback.engine.make_sink())
+        from . import analysis
+        self.analyser = analysis.Analyser(self.lib)
+        if self.settings["sound_check"] and not os.environ.get("FOLIO_CHORD_NO_SCAN"):
+            self.analyser.start()
         icons = os.environ.get("FOLIO_CHORD_SHARE") or os.path.join(os.path.dirname(__file__), "..", "..", "share")
         for d in (icons, "/usr/share/folio-chord"):
             p = os.path.join(d, "icons")
@@ -316,6 +453,16 @@ class ChordApp(Gtk.Application):
         GObject.add_emission_hook(Gtk.Window, "realize", own)
         from . import mpris
         self.mpris = mpris.Mpris(self)
+
+    def eq_preset(self, name):
+        """A preset by name: iTunes' own, or one made with Make Preset (C3-25)."""
+        c = self.settings.get("eq_custom") or {}
+        if name in c:
+            return tuple(c[name])
+        return player.PRESETS.get(name)
+
+    def eq_presets(self):
+        return sorted(player.PRESETS) + sorted(n for n in (self.settings.get("eq_custom") or {}) if n not in player.PRESETS)
 
     def apply_theme(self, dark):
         self._css.load_from_data(theme.css(dark).encode())
@@ -366,6 +513,7 @@ class ChordApp(Gtk.Application):
 
     def do_shutdown(self):
         try:
+            self.playback.save_session()
             self.playback.stop()
             self.settings.save()
         except Exception:

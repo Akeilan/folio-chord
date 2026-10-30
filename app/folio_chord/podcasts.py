@@ -37,7 +37,7 @@ SCHEMA = """
 create table if not exists podcasts(
   id integer primary key, feed text unique, title text, author text, description text, artwork text,
   link text, genre text, added real, refreshed real, auto_download integer default 1, keep integer default 0,
-  etag text);
+  etag text, speed real default 1.0);
 create table if not exists episodes(
   id integer primary key, podcast integer, guid text, title text, published real, duration real,
   url text, mime text, size integer, description text, link text, played integer default 0,
@@ -201,6 +201,9 @@ class Podcasts:
         self.folder = folder
         with lib.lock:
             lib.db.executescript(SCHEMA)
+            have = {r[1] for r in lib.db.execute("pragma table_info(podcasts)")}
+            if "speed" not in have:
+                lib.db.execute("alter table podcasts add column speed real default 1.0")
             lib.db.commit()
 
     def shows(self):
@@ -288,6 +291,11 @@ class Podcasts:
     def mark_played(self, eids, played=True):
         for e in eids:
             self.set(e, played=1 if played else 0, position=0, new=0)
+
+    def set_speed(self, pid, speed):
+        with self.lib.lock:
+            self.lib.db.execute("update podcasts set speed=? where id=?", (float(speed), pid))
+            self.lib.db.commit()
 
     def set_auto_download(self, pid, on):
         with self.lib.lock:

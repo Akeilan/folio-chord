@@ -74,6 +74,24 @@ class PlayQueue:
             self.order = list(range(len(self.source)))
             self.pos = cur
 
+    def current_index(self):
+        """Where the song playing sits in source (None when it isn't from it)."""
+        if 0 <= self.pos < len(self.order) and self.source and self.source[self.order[self.pos]] == self.current:
+            return self.order[self.pos]
+        return self.source.index(self.current) if self.current in self.source else None
+
+    def set_source(self, ids, cur_index=None):
+        """Change the list being played (Chordamp's playlist editor) without stopping: cur_index is
+        where the song playing now sits in the new list (None: wherever it turns up first)."""
+        self.source = list(ids)
+        if cur_index is None and self.current in self.source:
+            cur_index = self.source.index(self.current)
+        if self.shuffle:
+            self._make_order(first=cur_index)
+        else:
+            self.order = list(range(len(self.source)))
+        self.pos = self.order.index(cur_index) if cur_index is not None and cur_index in self.order else -1
+
     def play_next(self, ids):
         self.up_next[0:0] = list(ids)
 

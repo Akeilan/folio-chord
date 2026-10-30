@@ -100,6 +100,8 @@ class Directory:
         return self._names("languages", limit)
 
     def clicked(self, st):
+        if st.get("uuid", "").startswith("custom:"):
+            return
         try:
             self._get("/json/url/" + st["uuid"])
         except Exception:       # noqa: BLE001 — counting is a courtesy
@@ -137,3 +139,50 @@ def played(lib, st):
     r = [x for x in recent(lib) if x["uuid"] != st["uuid"]]
     r.insert(0, st)
     lib.put("radio_recent", json.dumps(r[:30]))
+
+
+# ---------------------------------------------------------------- station playlists (C3-17)
+PLAYLIST_TYPES = ("audio/x-scpls", "audio/scpls", "audio/x-mpegurl", "audio/mpegurl", "video/x-ms-asf",
+                  "video/x-ms-asx", "application/pls+xml", "application/xspf+xml")
+
+
+def looks_like_playlist(url):
+    path = url.split("?")[0].lower()
+    return path.endswith((".pls", ".m3u", ".asx", ".xspf"))
+
+
+def parse_playlist(text):
+    """The stream addresses in a .pls, .m3u, .asx or .xspf file, in order. An HLS playlist (.m3u8
+    with #EXT-X- lines) is a stream itself: nothing is returned for it."""
+    import re
+    if "#EXT-X-" in text:
+        return []
+    urls = []
+    if re.search(r"(?im)^\[playlist\]", text):
+        pairs = sorted((int(n), u.strip()) for n, u in re.findall(r"(?im)^File(\d+)\s*=\s*(\S+)", text))
+        urls = [u for _n, u in pairs]
+    elif "<asx" in text.lower():
+        urls = re.findall(r'(?i)<ref\s+href\s*=\s*"([^"]+)"', text)
+    elif "<playlist" in text.lower() and "xspf" in text.lower():
+        urls = re.findall(r"(?i)<location>\s*([^<\s]+)\s*</location>", text)
+    else:
+        urls = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+    return [u for u in urls if "://" in u]
+
+
+def resolve(url):
+    """The address to play for url: the first stream in a station playlist, else url itself."""
+    from . import net
+    if not url.lower().startswith(("http://", "https://")):
+        return url
+    if not looks_like_playlist(url):
+        return url
+    data = net.get(url, timeout=15)[:200000].decode("utf-8", "replace")
+    got = parse_playlist(data)
+    return got[0] if got else url
+
+
+def custom_station(name, url):
+    """A station you added yourself (not in the directory)."""
+    return {"uuid": "custom:" + url, "name": name or url, "url": url, "homepage": "", "favicon": "", "tags": [],
+            "country": "", "countrycode": "", "language": "", "codec": "", "bitrate": 0, "votes": 0, "clicks": 0}

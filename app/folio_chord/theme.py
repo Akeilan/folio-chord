@@ -5,7 +5,7 @@ version. Every colour is set here so the desktop theme never shows through (X2-0
 LIGHT = dict(
     accent="#b8187f", accent_dark="#8f1262", accent_fg="#ffffff",
     bg="#e8e8e8", fg="#1e1e1e", dim="#5f5f5f", line="#b5b5b5",
-    top1="#e4e4e4", top2="#b9b9b9", top_fg="#262626",
+    top1="#e4e4e4", top2="#b9b9b9", top_fg="#262626", title="#b8187f", title_fg="#ffffff", title_hover="#d23c9c",
     lcd1="#f3f4ea", lcd2="#dfe3d0", lcd_fg="#1e2316", lcd_dim="#525a44", lcd_line="#8f9a7c",
     lcd_trough="#c3c9b1", lcd_fill="#59634a",
     src="#e6e0e6", src_fg="#1e1e1e", src_head="#77687a", src_sel1="#d23c9c", src_sel2="#b0177a",
@@ -20,7 +20,7 @@ LIGHT = dict(
 DARK = dict(
     accent="#e04aad", accent_dark="#b52a8a", accent_fg="#ffffff",
     bg="#2a2a2a", fg="#ececec", dim="#a6a6a6", line="#474747",
-    top1="#4a4a4a", top2="#2e2e2e", top_fg="#ececec",
+    top1="#4a4a4a", top2="#2e2e2e", top_fg="#ececec", title="#a8237d", title_fg="#ffffff", title_hover="#c43a95",
     lcd1="#20251c", lcd2="#171b13", lcd_fg="#e3edd2", lcd_dim="#a9b694", lcd_line="#4c5641",
     lcd_trough="#3a4232", lcd_fill="#c9d6b3",
     src="#2c262c", src_fg="#e6e6e6", src_head="#b09aac", src_sel1="#c43a95", src_sel2="#97206f",
@@ -193,8 +193,8 @@ button.chord-default label, .chord-dialog button.suggested-action label { color:
 .chord-dialog notebook tab label { color: %(fg)s; }
 .chord-dialog notebook tab:checked { box-shadow: inset 0 -2px %(accent)s; }
 .chord-dialog frame > border, .chord-own frame > border { border-color: %(line)s; }
-.chord-dialog headerbar, .chord-dialog .titlebar { background-color: %(top1)s; background-image: none; color: %(top_fg)s; border-color: %(line)s; box-shadow: none; }
-.chord-dialog headerbar label { color: %(top_fg)s; }
+.chord-dialog headerbar, .chord-dialog .titlebar { background-color: %(title)s; background-image: none; color: %(title_fg)s; border-color: %(title)s; box-shadow: none; }
+.chord-dialog headerbar label { color: %(title_fg)s; }
 .chord-dialog .chord-art { background-color: %(list)s; border: 1px solid %(line)s; }
 .chord-dialog .chord-eq-scale trough { background-color: %(btn2)s; border: 1px solid %(btn_line)s; min-width: 4px; }
 .chord-dialog .chord-eq-scale highlight { background-color: %(accent)s; }
@@ -217,18 +217,23 @@ tooltip, tooltip.background { background-color: %(tip)s; color: %(tip_fg)s; bord
 tooltip label { color: %(tip_fg)s; padding: 2px 3px; }
 tooltip * { background-color: transparent; }
 
-/* the title bar GTK draws itself (Wayland) */
+/* the title bar (Chord's own, in the suite's way: the app's colour) */
+headerbar.chord-titlebar { min-height: 30px; padding: 0 4px; border-radius: 0; }
+headerbar.chord-titlebar label.title { font-weight: normal; }
+headerbar.chord-titlebar button.titlebutton.close:hover { background-color: #e81123; }
 .chord-own > .titlebar, .chord-own headerbar.titlebar, .chord-own > headerbar {
-  background-image: linear-gradient(to bottom, %(top1)s, %(top1)s); background-color: %(top1)s; color: %(top_fg)s;
-  border-color: %(line)s; box-shadow: none; }
-.chord-own > .titlebar label, .chord-own headerbar.titlebar label, .chord-own headerbar label.title { color: %(top_fg)s; }
+  background-image: linear-gradient(to bottom, %(title)s, %(title)s); background-color: %(title)s; color: %(title_fg)s;
+  border-color: %(title)s; box-shadow: none; }
+.chord-own > .titlebar label, .chord-own headerbar.titlebar label, .chord-own headerbar label.title { color: %(title_fg)s; }
 .chord-own headerbar button.titlebutton, .chord-own .titlebar button.titlebutton { background-image: none; background-color: transparent;
-  border: none; box-shadow: none; color: %(top_fg)s; }
-.chord-own headerbar button.titlebutton:hover { background-color: alpha(%(top_fg)s, 0.12); }
-.chord-own headerbar button.titlebutton image { color: %(top_fg)s; }
-.chord-dialog > .titlebar, .chord-dialog headerbar.titlebar { background-image: none; background-color: %(top1)s; color: %(top_fg)s; }
-.chord-dialog headerbar.titlebar label, .chord-dialog headerbar button.titlebutton image { color: %(top_fg)s; }
+  border: none; box-shadow: none; color: %(title_fg)s; }
+.chord-own headerbar button.titlebutton:hover { background-color: alpha(%(title_fg)s, 0.12); }
+.chord-own headerbar button.titlebutton image { color: %(title_fg)s; }
+.chord-dialog > .titlebar, .chord-dialog headerbar.titlebar { background-image: none; background-color: %(title)s; color: %(title_fg)s; }
+.chord-dialog headerbar.titlebar label, .chord-dialog headerbar button.titlebutton image { color: %(title_fg)s; }
 .chord-dialog headerbar button.titlebutton { background-image: none; background-color: transparent; border: none; box-shadow: none; }
+.chord-own > .titlebar:backdrop, .chord-own headerbar.titlebar:backdrop, .chord-dialog headerbar.titlebar:backdrop {
+  background-image: none; background-color: %(title)s; color: alpha(%(title_fg)s, 0.8); }
 .chord-mini { background-image: linear-gradient(to bottom, %(top1)s, %(top2)s); }
 .chord-mini label { color: %(top_fg)s; }
 .chord-vis, .chord-vis.background { background-color: %(vis)s; }

@@ -21,7 +21,8 @@ create table if not exists tracks(
   last_played real, skip_count integer default 0, last_skipped real, rating integer default 0,
   checked integer default 1, has_art integer default 0, missing integer default 0,
   start_time real default 0, stop_time real default 0, volume_adjust integer default 0, eq text default '',
-  remember_position integer default 0, position real default 0, skip_shuffle integer default 0);
+  remember_position integer default 0, position real default 0, skip_shuffle integer default 0,
+  rg_measured integer default 0);
 create table if not exists folders(path text primary key);
 create table if not exists playlists(
   id integer primary key, name text, kind text, parent integer, rules text, position integer default 0);
@@ -71,14 +72,23 @@ DEFAULT_SMART = [
 ]
 
 
-def rules_sql(spec, now=None):
-    """(where clause, params, order, limit) for a Smart Playlist spec:
-    {"match": "all"|"any", "rules": [[column, op, value, value2/unit], ...],
-     "limit": [n, unit] or None, "selected_by": key, "checked_only": bool}"""
-    now = time.time() if now is None else now
+def _clause(spec, now, members, depth=0):
+    """SQL for one group of rules: (expression, params). A rule is [column, op, value, value2/unit],
+    or a nested group {"match": "all"|"any", "rules": [...]} (C3-22)."""
     parts, params = [], []
     for r in spec.get("rules", []):
+        if isinstance(r, dict):
+            if depth < 8:
+                sub, sp = _clause(r, now, members, depth + 1)
+                parts.append(sub)
+                params += sp
+            continue
         col, op = r[0], r[1]
+        if col == "playlist":
+            ids = members(int(r[2])) if members and len(r) > 2 and r[2] not in (None, "") else []
+            inside = "id in (%s)" % ",".join(str(int(i)) for i in ids) if ids else "0"
+            parts.append(inside if op == "is" else "not (%s)" % inside)
+            continue
         if col not in FIELD:
             continue
         kind = FIELD[col][1]
@@ -123,7 +133,16 @@ def rules_sql(spec, now=None):
         elif kind == "bool":
             parts.append("coalesce(%s,0) %s 0" % (col, "<>" if op == "is true" else "="))
     joiner = " and " if spec.get("match", "all") == "all" else " or "
-    where = joiner.join("(%s)" % p for p in parts) if parts else "1"
+    return (joiner.join("(%s)" % p for p in parts) if parts else "1"), params
+
+
+def rules_sql(spec, now=None, members=None):
+    """(where clause, params, order, limit) for a Smart Playlist spec:
+    {"match": "all"|"any", "rules": [rule or nested group, ...], "limit": [n, unit] or None,
+     "selected_by": key, "checked_only": bool}. members(playlist id) -> track ids, for the
+    "Playlist is / is not" rule."""
+    now = time.time() if now is None else now
+    where, params = _clause(spec, now, members)
     if spec.get("checked_only"):
         where = "(%s) and checked" % where
     where = "(%s) and not missing" % where
@@ -144,6 +163,11 @@ class Library:
         self.lock = threading.RLock()
         with self.lock:
             self.db.executescript(SCHEMA)
+            # columns added since the first release, for libraries made by it
+            have = {r[1] for r in self.db.execute("pragma table_info(tracks)")}
+            for col, decl in (("rg_measured", "integer default 0"),):
+                if col not in have:
+                    self.db.execute("alter table tracks add column %s %s" % (col, decl))
             if not self.get("seeded"):
                 for i, (name, spec) in enumerate(DEFAULT_SMART):
                     self.db.execute("insert into playlists(name, kind, rules, position) values(?,?,?,?)",
@@ -419,7 +443,7 @@ class Library:
         if p is None:
             return []
         if p["kind"] == "smart":
-            return self.smart_tracks(json.loads(p["rules"] or "{}"))
+            return self.smart_tracks(json.loads(p["rules"] or "{}"), _seen={pid})
         if p["kind"] == "folder":
             out, seen = [], set()
             for c in self.q("select id from playlists where parent=? order by position", (pid,)):
@@ -430,8 +454,19 @@ class Library:
             return out
         return self.q("select t.* from playlist_items i join tracks t on t.id=i.track where i.playlist=? and not t.missing order by i.pos", (pid,))
 
-    def smart_tracks(self, spec, now=None):
-        where, params, order, limit = rules_sql(spec, now)
+    def smart_tracks(self, spec, now=None, _seen=None):
+        seen = set(_seen or ())
+
+        def members(pid):
+            if pid in seen:          # a playlist that (through others) refers to itself
+                return []
+            p = self.playlist(pid)
+            if p is None:
+                return []
+            if p["kind"] == "smart":
+                return [r["id"] for r in self.smart_tracks(json.loads(p["rules"] or "{}"), now, seen | {pid})]
+            return [r["id"] for r in self.playlist_tracks(pid)]
+        where, params, order, limit = rules_sql(spec, now, members)
         rows = self.q("select * from tracks where %s order by %s" % (
             where, order or "coalesce(nullif(album_artist,''), artist) collate nocase, album collate nocase, disc_no, track_no"), params)
         if not limit:

@@ -2,7 +2,7 @@
 (Genres, Artists, Albums), the album list and the grid of album covers."""
 import time
 
-from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk, Pango
+from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk, Pango  # noqa: F401
 
 from . import art, theme
 
@@ -496,5 +496,183 @@ class AlbumList(Gtk.ScrolledWindow):
                 v.get_selection().unselect_all()
                 v.get_selection().select_path(hit[0])
             self.emit("context", ev)
+            return True
+        return False
+
+
+class CoverFlow(Gtk.DrawingArea):
+    """iTunes' Cover Flow (C3-21): the album covers in a row, the chosen one face on, the others
+    turned away to the sides, with their reflections; click, scroll or the arrow keys to move.
+    Signals: chosen(album rows) when an album comes to the front, play(album rows) on double-click."""
+    __gsignals__ = {"chosen": (GObject.SignalFlags.RUN_FIRST, None, (object,)),
+                    "play": (GObject.SignalFlags.RUN_FIRST, None, (object,))}
+    SIZE = 180
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.albums = []
+        self.pos = 0.0          # where the row is drawn (animates toward self.index)
+        self.index = 0
+        self.set_size_request(-1, 300)
+        self.set_can_focus(True)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.SCROLL_MASK | Gdk.EventMask.SMOOTH_SCROLL_MASK |
+                        Gdk.EventMask.KEY_PRESS_MASK)
+        self.connect("draw", self._draw)
+        self.connect("button-press-event", self._press)
+        self.connect("scroll-event", self._scroll)
+        self.connect("key-press-event", self._key)
+        self._anim = None
+        self._images = {}
+
+    def set_rows(self, rows):
+        groups, order = {}, []
+        for r in rows:
+            k = ((r["album_artist"] or r["artist"] or "").lower(), (r["album"] or "").lower())
+            if k not in groups:
+                groups[k] = []
+                order.append(k)
+            groups[k].append(r)
+        self.albums = [groups[k] for k in sorted(order, key=lambda k: (k[1], k[0]))]
+        self.index = min(self.index, max(0, len(self.albums) - 1))
+        self.pos = float(self.index)
+        self._images = {}
+        self.queue_draw()
+
+    def _surface(self, i):
+        if i in self._images:
+            return self._images[i]
+        import cairo
+        r = self.albums[i][0]
+        pb = art.for_song(r["path"], self.SIZE) or art.placeholder(self.SIZE, self.win.dark)
+        s = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.SIZE, self.SIZE)
+        cr = cairo.Context(s)
+        Gdk.cairo_set_source_pixbuf(cr, pb, (self.SIZE - pb.get_width()) / 2, (self.SIZE - pb.get_height()) / 2)
+        cr.paint()
+        self._images[i] = s
+        return s
+
+    def go(self, i):
+        if not self.albums:
+            return
+        i = max(0, min(len(self.albums) - 1, i))
+        if i == self.index:
+            return
+        self.index = i
+        self.emit("chosen", self.albums[i])
+        if self._anim is None:
+            self._anim = GLib.timeout_add(16, self._step)
+
+    def _step(self):
+        d = self.index - self.pos
+        if abs(d) < 0.01:
+            self.pos = float(self.index)
+            self._anim = None
+            self.queue_draw()
+            return False
+        self.pos += d * 0.22
+        self.queue_draw()
+        return True
+
+    def _draw(self, w, cr):
+        import cairo
+        a = w.get_allocation()
+        W, H = a.width, a.height
+        dark = self.win.dark
+        g = cairo.LinearGradient(0, 0, 0, H)
+        if dark:
+            g.add_color_stop_rgb(0, 0.10, 0.10, 0.10)
+            g.add_color_stop_rgb(1, 0.0, 0.0, 0.0)
+        else:
+            g.add_color_stop_rgb(0, 0.16, 0.16, 0.17)
+            g.add_color_stop_rgb(1, 0.02, 0.02, 0.02)
+        cr.set_source(g)
+        cr.paint()
+        if not self.albums:
+            return True
+        S = self.SIZE
+        cy = H * 0.42
+        order = sorted(range(len(self.albums)), key=lambda i: -abs(i - self.pos))
+        for i in order:
+            off = i - self.pos
+            if abs(off) > 9:
+                continue
+            t = min(1.0, abs(off))
+            sign = 1 if off > 0 else -1
+            # the front cover faces on; the others are turned, narrower and further back
+            x = W / 2 + (off * S * 0.28 + (S * 0.55 * (1 if off > 0 else -1) * t))
+            sx = 1.0 - 0.62 * t
+            sc = 1.0 - 0.18 * t
+            cr.save()
+            cr.translate(x, cy)
+            cr.scale(sc, sc)
+            cr.transform(cairo.Matrix(sx, -0.18 * t * sign, 0, 1, 0, 0))   # turned away: narrower and slanted
+            img = self._surface(i)
+            cr.set_source_surface(img, -S / 2, -S / 2)
+            cr.paint()
+            # the reflection
+            cr.scale(1, -1)
+            cr.set_source_surface(img, -S / 2, -S / 2 - S)
+            fade = cairo.LinearGradient(0, -S / 2 - S, 0, -S / 2)
+            fade.add_color_stop_rgba(0, 0, 0, 0, 0.0)
+            fade.add_color_stop_rgba(0.55, 0, 0, 0, 0.0)
+            fade.add_color_stop_rgba(1, 0, 0, 0, 0.35)
+            cr.mask(fade)
+            cr.restore()
+        r = self.albums[self.index][0]
+        cr.set_source_rgb(0.94, 0.94, 0.94)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+        cr.set_font_size(13)
+        t1 = r["album"] or "Unknown Album"
+        e = cr.text_extents(t1)
+        cr.move_to(W / 2 - e.width / 2, H - 30)
+        cr.show_text(t1)
+        cr.set_source_rgb(0.7, 0.7, 0.7)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(11)
+        t2 = r["album_artist"] or r["artist"] or ""
+        e = cr.text_extents(t2)
+        cr.move_to(W / 2 - e.width / 2, H - 13)
+        cr.show_text(t2)
+        return True
+
+    def hit(self, x):
+        a = self.get_allocation()
+        off = (x - a.width / 2) / (self.SIZE * 0.5)
+        if abs(off) < 1:
+            return self.index
+        return self.index + int(off / abs(off)) * (1 + int((abs(off) - 1) / 0.56))
+
+    def _press(self, w, ev):
+        self.grab_focus()
+        i = self.hit(ev.x)
+        if ev.type == Gdk.EventType._2BUTTON_PRESS and i == self.index and self.albums:
+            self.emit("play", self.albums[self.index])
+            return True
+        self.go(i)
+        return True
+
+    def _scroll(self, w, ev):
+        d = ev.direction
+        if d in (Gdk.ScrollDirection.DOWN, Gdk.ScrollDirection.RIGHT):
+            self.go(self.index + 1)
+        elif d in (Gdk.ScrollDirection.UP, Gdk.ScrollDirection.LEFT):
+            self.go(self.index - 1)
+        elif d == Gdk.ScrollDirection.SMOOTH:
+            ok, dx, dy = ev.get_scroll_deltas()
+            v = dx if abs(dx) > abs(dy) else dy
+            if abs(v) > 0.3:
+                self.go(self.index + (1 if v > 0 else -1))
+        return True
+
+    def _key(self, w, ev):
+        if ev.keyval in (Gdk.KEY_Right, Gdk.KEY_Down):
+            self.go(self.index + 1)
+            return True
+        if ev.keyval in (Gdk.KEY_Left, Gdk.KEY_Up):
+            self.go(self.index - 1)
+            return True
+        if ev.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and self.albums:
+            self.emit("play", self.albums[self.index])
             return True
         return False
