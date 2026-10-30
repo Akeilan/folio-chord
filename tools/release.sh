@@ -10,6 +10,7 @@ V=$(sed -n 's/^Version: //p' $R/packaging/DEBIAN/control)
 pgrep -x Xvfb -a | grep -q ":$XD " || { rm -f /tmp/.X$XD-lock /tmp/.X11-unix/X$XD; setsid -f Xvfb :$XD -screen 0 1600x1000x24 -nolisten tcp </dev/null >/dev/null 2>&1; sleep 1; }
 UI=${UI_TESTS:-ui_library.py ui_play.py ui_net.py ui_cd.py}
 mkdir -p /srv/jammy/src/chord && rsync -a --delete --exclude .git $R/ /srv/jammy/src/chord/
+if [ -z "${INSTALLED_ONLY:-}" ]; then
 echo "== engine"
 chroot /srv/jammy bash -c "cd /src/chord; python3 tests/test_engine.py; python3 tests/test_net.py" | grep -E '^FAIL|checks|all passed|FAILED|Traceback'
 echo "== ui (source)"
@@ -22,9 +23,10 @@ chroot /srv/jammy bash -c "cd /src/chord; DISPLAY=:$XD UI_TIMEOUT=400 sh tests/t
 echo "== walk"
 chroot /srv/jammy bash -c "cd /src/chord; DISPLAY=:$XD UI_TIMEOUT=900 WALK_OUT=/tmp/chord-command-walk.tsv sh tests/run_ui.sh command_walk.py 2>&1 | grep -E 'WALK|^FAIL|Traceback|not available'"
 mkdir -p $R/docs; cp /srv/jammy/tmp/chord-command-walk.tsv $R/docs/command-walk.tsv 2>/dev/null
+fi
 echo "== deb"
 sh $R/build-deb.sh /home/claude/out && ls -la /home/claude/out/folio-chord_${V}_all.deb
-for m in /srv/jammy /srv/nolo /srv/noble; do
+for m in ${MACHINES:-/srv/jammy /srv/nolo /srv/noble}; do
   cp /home/claude/out/folio-chord_${V}_all.deb $m/tmp/
   flock /home/claude/.dpkg.lock chroot $m bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -q /tmp/folio-chord_${V}_all.deb >/tmp/chord-install.log 2>&1 || tail -5 /tmp/chord-install.log; dpkg -l folio-chord | tail -1 | awk '{print \$1, \$3}'; folio-chord --version"
   rm -rf $m/tmp/chordtests; mkdir -p $m/tmp/chordtests; cp -r $R/tests/* $m/tmp/chordtests/
