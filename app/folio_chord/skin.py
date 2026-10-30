@@ -25,6 +25,8 @@ class Skin:
                    "font": "Sans"}
         self.text_font = None          # None: draw text with Pango (Chordamp's own skin)
         self.lcd = (1.0, 0.31, 0.78)   # text colour when there is no text.bmp
+        self.regions = {}              # region.txt (C3-36): {"normal"|"windowshade"|"equalizer"|...: [[(x, y), ...], ...]}
+        self.cursors = {}              # the skin's .cur pointers: {"normal": (pixbuf, hot x, hot y), ...}
 
     def has(self, sheet):
         return sheet in self.sheets
@@ -95,6 +97,13 @@ def load_wsz(path):
                         pass
             if len(cols) >= 24:
                 sk.vis = cols[:24]
+        if "region.txt" in names:
+            sk.regions = parse_region(z.read(names["region.txt"]).decode("latin-1"))
+        for n, full in names.items():
+            if n.endswith(".cur"):
+                cur = _cursor(z.read(full))
+                if cur:
+                    sk.cursors[n[:-4]] = cur
         if "pledit.txt" in names:
             for line in z.read(names["pledit.txt"]).decode("latin-1").splitlines():
                 if "=" not in line:
@@ -108,6 +117,52 @@ def load_wsz(path):
                     if c:
                         sk.pl[k] = c
     return sk
+
+
+def parse_region(text):
+    """region.txt: per section, NumPoints (points in each polygon) and PointList (x,y pairs)."""
+    out, sec, vals = {}, None, {}
+
+    def nums(v):
+        return [int(t) for t in v.replace(",", " ").split() if t.strip().lstrip("-").isdigit()]
+
+    def flush():
+        if sec and "numpoints" in vals and "pointlist" in vals:
+            counts, pts = nums(vals["numpoints"]), nums(vals["pointlist"])
+            polys, i = [], 0
+            for c in counts:
+                xy = pts[i * 2:(i + c) * 2]
+                if len(xy) == c * 2 and c >= 3:
+                    polys.append([(xy[k], xy[k + 1]) for k in range(0, len(xy), 2)])
+                i += c
+            if polys:
+                out[sec] = polys
+    for line in text.splitlines():
+        line = line.split(";")[0].strip()
+        if line.startswith("[") and line.endswith("]"):
+            flush()
+            sec, vals = line[1:-1].strip().lower(), {}
+        elif "=" in line and sec:
+            k, v = line.split("=", 1)
+            vals[k.strip().lower()] = vals.get(k.strip().lower(), "") + " " + v
+    flush()
+    return out
+
+
+def _cursor(data):
+    """A Windows .cur (one image, hot spot in the header)."""
+    if len(data) < 22 or data[2:4] != b"\x02\x00":
+        return None
+    hx = int.from_bytes(data[10:12], "little")
+    hy = int.from_bytes(data[12:14], "little")
+    try:
+        # the ico reader reads it once the type says "icon"
+        loader = GdkPixbuf.PixbufLoader.new_with_type("ico")
+        loader.write(data[:2] + b"\x01\x00" + data[4:])
+        loader.close()
+        return loader.get_pixbuf(), hx, hy
+    except Exception:       # noqa: BLE001 — an unreadable pointer: keep the desktop's
+        return None
 
 
 # ---------------------------------------------------------------- Chordamp's own skin

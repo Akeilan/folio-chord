@@ -69,6 +69,34 @@ class Equalizer(Gtk.Window):
             scale_lab.pack_start(l, True, True, 0)
         sliders.pack_end(scale_lab, False, False, 0)
         box.pack_start(sliders, True, True, 0)
+        # balance (C3-37): the same setting Chordamp's balance slider uses
+        bal = Gtk.Box(spacing=8)
+        bl = Gtk.Label(label="Balance")
+        bl.get_style_context().add_class("chord-dim")
+        bal.pack_start(bl, False, False, 0)
+        bal.pack_start(Gtk.Label(label="L"), False, False, 0)
+        self.balance = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -1, 1, 0.05)
+        self.balance.set_draw_value(False)
+        self.balance.add_mark(0, Gtk.PositionType.BOTTOM, None)
+        self.balance.set_value(float(s.get("balance", 0.0)))
+        self.balance.set_hexpand(True)
+        self.balance.set_tooltip_text("Balance between the left and right speakers (double-click for the middle)")
+        self.balance.connect("value-changed", lambda *_: self.set_balance(self.balance.get_value()))
+        self.balance.connect("button-press-event", lambda w, e: (self.balance.set_value(0), True)[1]
+                             if e.type == Gdk.EventType._2BUTTON_PRESS else False)
+        bal.pack_start(self.balance, True, True, 0)
+        bal.pack_start(Gtk.Label(label="R"), False, False, 0)
+        box.pack_start(bal, False, False, 0)
+        self.connect("map", lambda *_: self.balance.set_value(self.win.app.playback.engine.balance))
+
+    def set_balance(self, b):
+        b = 0.0 if abs(b) < 0.06 else round(b, 2)
+        self.win.app.playback.engine.set_balance(b)
+        self.win.settings["balance"] = b
+        self.win.settings.save()
+        ca = getattr(self.win.app, "chordamp", None)
+        if ca is not None:
+            ca.main.area.queue_draw()
 
     def fill_presets(self, active=None):
         self._quiet = True

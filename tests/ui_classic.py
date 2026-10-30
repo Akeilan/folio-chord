@@ -25,6 +25,17 @@ def px(win, x, y):
     return themecheck._px(data, stride, x, y)
 
 
+def cur_file(w=16, h=16, hot=(3, 5)):
+    """A small Windows .cur (32-bit, magenta) with the given hot spot."""
+    import struct
+    pixels = b"\xff\x00\xff\xff" * (w * h)
+    mask = b"\x00" * (((w + 31) // 32) * 4 * h)
+    bih = struct.pack("<IiiHHIIiiII", 40, w, h * 2, 1, 32, 0, len(pixels) + len(mask), 0, 0, 0, 0)
+    img = bih + pixels + mask
+    head = struct.pack("<HHH", 0, 2, 1) + struct.pack("<BBBBHHII", w, h, 0, 0, hot[0], hot[1], len(img), 22)
+    return head + img
+
+
 def solid_bmp(w, h, rgb):
     pb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, w, h)
     pb.fill((rgb[0] << 24) | (rgb[1] << 16) | (rgb[2] << 8) | 0xff)
@@ -136,9 +147,14 @@ def main():
     check(ca.main.show_left, "clicking the time shows the time left")
     ca.main.click("vis")
     check(s["classic_vis"] == "oscilloscope", "clicking the visualizer changes it")
+    wait(lambda: pb.engine.scope and max(pb.engine.scope) > 1000, 3)
+    wave = pb.engine.scope
+    check(wave and max(wave) > 1000 and min(wave) < -1000, "C3-35: the oscilloscope gets the real waveform",
+          (len(wave or []), max(wave or [0]), min(wave or [0])))
     pump(0.3)
     shot(ca.main.area, "classic_osc")
     ca.set_vis("spectrum")
+    check(pb.engine.scope is None, "and stops taking it when the oscilloscope is off")
     # ---- equalizer
     on = s["eq_on"]
     ca.eq.click("on")
@@ -202,6 +218,32 @@ def main():
     i = key(ca, Gdk.KEY_j)
     pump(0.4)
     check(pb.now and pb.now["title"] == list(songs)[3], "J jumps to a song by name", pb.now and pb.now["title"])
+    # ---- C3-38 Up Next in the playlist editor
+    q = pb.queue
+    ci = q.current_index()
+    queued = q.source[0] if ci != 0 else q.source[1]
+    q.add([queued])
+    pump(0.7)
+    rows = ca.pl.rows()
+    d = ca.pl.display_index(ci)
+    check(rows[d + 1][0] == "next" and rows[d + 1][2] == queued, "Up Next shows right after the song playing", rows[d:d + 2])
+    shot(ca.pl.area, "classic_upnext")
+    ca.pl.sel_next = {0}
+    ca.remove_selected()
+    check(q.up_next == [], "and can be taken out again")
+    q.add([queued])
+    ca.play_up_next(0)
+    wait(lambda: pb.now and pb.now["id"] == queued, 3)
+    check(pb.now["id"] == queued and q.up_next == [], "double-clicking it plays it now")
+    # ---- C3-37 balance in the Standard look
+    eqw = w.run("equalizer")
+    eqw.balance.set_value(-0.5)
+    check(pb.engine.balance == -0.5 and s["balance"] == -0.5, "Equalizer: the balance slider in Standard")
+    ca.set_balance(0.3)
+    check(abs(eqw.balance.get_value() - 0.3) < 0.01, "and it follows Chordamp's")
+    eqw.balance.set_value(0.02)
+    check(pb.engine.balance == 0.0, "it snaps to the middle")
+    eqw.hide()
     ca.active_part = ca.pl
     pump(0.2)
     shot(ca.pl.area, "classic_pl2")
@@ -240,6 +282,11 @@ def main():
         z.writestr("viscolor.txt", "\n".join("0,%d,0, // c%d" % (i * 10, i) for i in range(24)))
         z.writestr("pledit.txt", "[Text]\nNormal=#00FF00\nCurrent=#FFFFFF\nNormalBG=#002000\nSelectedBG=#0000C0\nFont=Sans\n")
         z.writestr("text.bmp", solid_bmp(155, 18, (0, 255, 0)))
+        # a cut-off corner (C3-36): the player is a five-sided shape; the equalizer a smaller box
+        z.writestr("region.txt", "[Normal]\nNumPoints=5\nPointList=0,0, 260,0, 275,15, 275,116, 0,116\n"
+                                 "[Equalizer]\nNumPoints=4\nPointList=0,0 275,0 275,100 0,100\n")
+        z.writestr("Normal.cur", cur_file(hot=(3, 5)))
+        z.writestr("CLOSE.CUR", cur_file(hot=(8, 8)))
     name = ca.load_skin(wsz)
     pump(0.3)
     check(name == "green.wsz" and s["skin"] == "green.wsz", "a classic skin loads", name)
@@ -247,6 +294,18 @@ def main():
     c = px(ca.main.area, 150, 108)
     check(c[1] > 140 and c[0] < 30, "the player wears it", c)
     check("green.wsz" in skinmod.installed(), "it is kept with the skins")
+    if ca.stack is None:
+        rg = ca.main.shape
+        check(rg is not None and not rg.contains_point(272, 2) and rg.contains_point(100, 50) and rg.contains_point(272, 100),
+              "C3-36: the skin's region.txt shapes the player window")
+        check(ca.eq.shape is not None and not ca.eq.shape.contains_point(10, 110), "and the equalizer")
+    pb_, hx, hy = ca.skin.cursors["normal"]
+    check((hx, hy) == (3, 5) and pb_.get_width() == 16 and "close" in ca.skin.cursors, "its own mouse pointers load, with hot spots")
+    ca.main.update_cursor(100, 60)
+    gw = ca.main.area.get_window()
+    check(gw is not None and gw.get_cursor() is not None and ca.main._cursor_name == "normal", "and are used over the player")
+    ca.main.update_cursor(266, 5)
+    check(ca.main._cursor_name == "close" and gw.get_cursor() is ca.cursor("close"), "a different one over the close button")
     shot(ca.main.area, "classic_skin")
     shot(ca.pl.area, "classic_skin_pl")
     out = ca.export_skin(os.path.join(OUT, "Chordamp.wsz"))
@@ -256,6 +315,7 @@ def main():
     check(skinmod.load_wsz(out).has("cbuttons"), "and read back")
     ca.set_skin("")
     pump(0.2)
+    check(ca.main.shape is None and ca.main.area.get_window().get_cursor() is None, "Chordamp's own skin: plain shape, the desktop's pointer")
     c = px(ca.main.area, 150, 108)
     check(not (c[1] > 140 and c[0] < 30), "Skins > Chordamp goes back to Chordamp's own")
     # ---- back to Standard

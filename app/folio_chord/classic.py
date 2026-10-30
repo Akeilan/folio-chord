@@ -6,7 +6,6 @@ Chordamp's own, or a classic .wsz skin you load.
 
   switch(win, look)   look: "standard" | "classic"; remembered in settings["look"]
 """
-import math
 import os
 import time
 
@@ -229,8 +228,50 @@ class SkinWindow(Gtk.Window):
             x, y = self._xy(e)
             self.slide(self.drag[1], x, y)
             return True
+        self.update_cursor(*self._xy(e))
         self.ca.move_motion(self, e)
         return False
+
+    # the skin's own shape and pointers (C3-36) -------------------------
+    def shape_key(self):
+        return None
+
+    def cursor_name(self, x, y):
+        return "normal"
+
+    def update_cursor(self, x, y):
+        name = self.cursor_name(x, y) if self.ca.skin.cursors else None
+        if name == getattr(self, "_cursor_name", None):
+            return
+        self._cursor_name = name
+        gw = self.area.get_window()
+        if gw is not None:
+            gw.set_cursor(self.ca.cursor(name) if name else None)
+
+    def shape_region(self):
+        """The window's outline from the skin's region.txt, as a cairo region (None: a plain rectangle)."""
+        polys = self.ca.skin.regions.get(self.shape_key() or "")
+        if not polys:
+            return None
+        s = self.ca.scale
+        w, h = self.size()
+        surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, w * s, h * s)
+        cr = cairo.Context(surf)
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+        cr.scale(s, s)
+        for poly in polys:
+            cr.move_to(*poly[0])
+            for p in poly[1:]:
+                cr.line_to(*p)
+            cr.close_path()
+        cr.set_source_rgba(1, 1, 1, 1)
+        cr.fill()
+        return Gdk.cairo_region_create_from_surface(surf)
+
+    def apply_shape(self):
+        self.shape = self.shape_region()
+        if self.ca.stack is None:
+            self.shape_combine_region(self.shape)
 
     def _release(self, w, e):
         x, y = self._xy(e)
@@ -301,6 +342,33 @@ class MainWindow(SkinWindow):
 
     def title_hit(self, x, y):
         return y < 14 and not (x >= 244 or x < 16)
+
+    def shape_key(self):
+        return "windowshade" if self.ca.settings.get("classic_shade") else "normal"
+
+    def cursor_name(self, x, y):
+        shade = self.ca.settings.get("classic_shade")
+        name = self.hit(x, y)
+        ws = "ws" if shade else ""
+        if name == "close":
+            return ws + "close"
+        if name == "min":
+            return ws + "min"
+        if name == "menu":
+            return "mainmenu"
+        if name == "shade":
+            return ws + "winbut"
+        if name == "pos":
+            return "posbar"
+        if name in ("volume", "balance"):
+            return "volbal"
+        if shade:
+            return "wsnormal"
+        if 111 <= x < 265 and 24 <= y < 36:
+            return "songname"
+        if y < 14:
+            return "titlebar"
+        return "normal"
 
     def drag_anywhere(self, x, y):
         return not self.ca.settings.get("classic_shade") and y < 116
@@ -576,27 +644,25 @@ class MainWindow(SkinWindow):
                     cr.rectangle(x, 43 + 15 - p, 3, 1)
                     cr.fill()
         elif mode == "oscilloscope" and playing:
-            mags = getattr(self, "_mags", None) or []
-            # a wave rebuilt from the loudest parts of the spectrum
-            n = len(mags)
-            parts = sorted(((m, i) for i, m in enumerate(mags[1:n // 3], 1)), reverse=True)[:6] if n else []
-            prev = None
-            for x in range(76):
-                v = 0.0
-                for m, i in parts:
-                    amp = max(0.0, (m + 70) / 70.0)
-                    v += amp * math.sin(i * x * 0.11 + self.osc_phase * (1 + i * 0.05))
-                v = v / max(1, len(parts)) * 1.6
-                y = int(max(0, min(15, 8 - v * 7)))
-                col = sk.vis[18 + min(4, abs(y - 8) // 2)]
-                cr.set_source_rgb(*col)
-                if prev is not None and abs(prev - y) > 1:
-                    lo, hi = sorted((prev, y))
-                    cr.rectangle(24 + x, 43 + lo, 1, hi - lo + 1)
-                else:
-                    cr.rectangle(24 + x, 43 + y, 1, 1)
-                cr.fill()
-                prev = y
+            wave = self.ca.pb.engine.scope
+            if wave:
+                # the real waveform (C3-35): 76 columns from the last stretch of sound, mono
+                n = len(wave)
+                step = max(1, n // 152)
+                start = max(0, n - 76 * step)
+                prev = None
+                for x in range(76):
+                    v = wave[min(n - 1, start + x * step)] / 32768.0
+                    y = int(max(0, min(15, round(7.5 - v * 7.5 * 1.6))))
+                    col = sk.vis[18 + min(4, abs(y - 8) // 2)]
+                    cr.set_source_rgb(*col)
+                    if prev is not None and abs(prev - y) > 1:
+                        lo, hi = sorted((prev, y))
+                        cr.rectangle(24 + x, 43 + lo, 1, hi - lo + 1)
+                    else:
+                        cr.rectangle(24 + x, 43 + y, 1, 1)
+                    cr.fill()
+                    prev = y
         cr.restore()
 
 
@@ -606,6 +672,19 @@ class EqWindow(SkinWindow):
 
     def __init__(self, ca):
         super().__init__(ca, "Chordamp Equalizer")
+
+    def shape_key(self):
+        return "equalizer"
+
+    def cursor_name(self, x, y):
+        name = self.hit(x, y)
+        if name == "close":
+            return "eqclose"
+        if name and self.is_slider(name):
+            return "eqslid"
+        if y < 14:
+            return "eqtitle"
+        return "eqnormal"
 
     def drag_anywhere(self, x, y):
         return True
@@ -709,6 +788,7 @@ class PlaylistWindow(SkinWindow):
         self.focus_row = 0
         self.rows_cache = []
         self.drag_rows = None
+        self.sel_next = set()       # selected Up Next entries (indexes into the queue's up_next)
         super().__init__(ca, "Chordamp Playlist")
 
     def size(self):
@@ -719,6 +799,27 @@ class PlaylistWindow(SkinWindow):
 
     def items(self):
         return list(self.ca.pb.queue.source)
+
+    def rows(self):
+        """What the editor shows, in play order (C3-38): the list, with Up Next right after the song
+        playing (or at the top when nothing from the list is playing). ("src", i, key) | ("next", j, key)."""
+        q = self.ca.pb.queue
+        src, nxt = list(q.source), list(q.up_next)
+        cur = q.current_index() if self.ca.pb.now and self.ca.pb.now.get("kind") != "station" else None
+        out = []
+        if cur is None:
+            out += [("next", j, k) for j, k in enumerate(nxt)]
+        for i, k in enumerate(src):
+            out.append(("src", i, k))
+            if i == cur:
+                out += [("next", j, k2) for j, k2 in enumerate(nxt)]
+        return out
+
+    def display_index(self, i):
+        for d, r in enumerate(self.rows()):
+            if r[0] == "src" and r[1] == i:
+                return d
+        return i
 
     def title_hit(self, x, y):
         return y < 20
@@ -732,6 +833,11 @@ class PlaylistWindow(SkinWindow):
     def is_slider(self, name):
         return name in ("grip", "scroll")
 
+    def cursor_name(self, x, y):
+        name = self.hit(x, y)
+        return {"close": "pclose", "grip": "psize", "scroll": "pvscroll", "add": "pwinbut", "rem": "pwinbut",
+                "sel": "pwinbut", "misc": "pwinbut", "list": "pwinbut"}.get(name, "ptbar" if y < 20 else "pnormal")
+
     def slide(self, name, x, y):
         if name == "grip":
             h = max(116, min(900, int(round((y + 10) / 29.0)) * 29))
@@ -739,7 +845,7 @@ class PlaylistWindow(SkinWindow):
                 self.ca.settings["classic_pl_h"] = h
                 self.resize_to()
         elif name == "scroll":
-            n = len(self.items())
+            n = len(self.rows())
             span = self.size()[1] - 58 - 18
             f = max(0.0, min(1.0, (y - 20 - 9) / max(1, span)))
             self.top = int(round(f * max(0, n - self.visible_rows())))
@@ -753,17 +859,33 @@ class PlaylistWindow(SkinWindow):
         self.ca.active_part = self
         if e.button == 1 and self.hit(x, y) == "rows":
             self.area.grab_focus()
-            i = self.top + int((y - 22) // self.ROW)
+            rows = self.rows()
+            d = self.top + int((y - 22) // self.ROW)
+            ctrl = e.state & Gdk.ModifierType.CONTROL_MASK
+            if 0 <= d < len(rows) and rows[d][0] == "next":
+                j = rows[d][1]
+                if e.type == Gdk.EventType._2BUTTON_PRESS:
+                    self.ca.play_up_next(j)
+                    return True
+                if ctrl:
+                    self.sel_next ^= {j}
+                else:
+                    self.sel, self.sel_next = set(), {j}
+                self.area.queue_draw()
+                return True
+            i = rows[d][1] if 0 <= d < len(rows) else -1
             n = len(self.items())
             if e.type == Gdk.EventType._2BUTTON_PRESS:
                 if 0 <= i < n:
                     self.ca.play_index(i)
                 return True
+            if not ctrl:
+                self.sel_next = set()
             if 0 <= i < n:
                 if e.state & Gdk.ModifierType.SHIFT_MASK and self.anchor is not None:
                     a, b = sorted((self.anchor, i))
                     self.sel = set(range(a, b + 1))
-                elif e.state & Gdk.ModifierType.CONTROL_MASK:
+                elif ctrl:
                     self.sel ^= {i}
                     self.anchor = i
                 else:
@@ -784,7 +906,11 @@ class PlaylistWindow(SkinWindow):
     def _motion(self, w, e):
         if self.drag_rows is not None:
             x, y = self._xy(e)
-            i = self.top + int((y - 22) // self.ROW)
+            rows = self.rows()
+            dd = max(0, min(len(rows) - 1, self.top + int((y - 22) // self.ROW)))
+            if not rows or rows[dd][0] != "src":
+                return True
+            i = rows[dd][1]
             start, last = self.drag_rows
             d = i - last
             if d and self.sel:
@@ -800,7 +926,7 @@ class PlaylistWindow(SkinWindow):
         return super()._release(w, e)
 
     def scrolled(self, d, x, y):
-        n = len(self.items())
+        n = len(self.rows())
         self.top = max(0, min(max(0, n - self.visible_rows()), self.top - d * 3))
         self.area.queue_draw()
 
@@ -812,6 +938,7 @@ class PlaylistWindow(SkinWindow):
             ca.pl_menu(name, self)
 
     def show_row(self, i):
+        i = self.display_index(i)
         vr = self.visible_rows()
         if i < self.top:
             self.top = i
@@ -850,26 +977,33 @@ class PlaylistWindow(SkinWindow):
         cr.set_source_rgb(*sk.pl["normalbg"])
         cr.paint()
         items = self.items()
+        rows = self.rows()
         cur = ca.pb.queue.current_index() if ca.pb.now and ca.pb.now.get("kind") != "station" else None
         font = sk.pl.get("font") or "Sans"
-        self.top = max(0, min(self.top, max(0, len(items) - self.visible_rows())))
+        self.top = max(0, min(self.top, max(0, len(rows) - self.visible_rows())))
         for r in range(self.visible_rows()):
-            i = self.top + r
-            if i >= len(items):
+            d = self.top + r
+            if d >= len(rows):
                 break
+            kind, i, key = rows[d]
             yy = 22 + r * self.ROW
-            if i in self.sel:
+            selected = (i in self.sel) if kind == "src" else (i in self.sel_next)
+            if selected:
                 cr.set_source_rgb(*sk.pl["selectedbg"])
                 cr.rectangle(12, yy, w - 32, self.ROW)
                 cr.fill()
-            col = sk.pl["current"] if i == cur else sk.pl["normal"]
-            name = "%d. %s" % (i + 1, item_name(ca, items[i]))
-            length = views.fmt_time(item_length(ca, items[i]))
+            if kind == "src":
+                col = sk.pl["current"] if i == cur else sk.pl["normal"]
+                name = "%d. %s" % (i + 1, item_name(ca, key))
+            else:
+                col = sk.pl["normal"]
+                name = "\u00bb Up Next: %s" % item_name(ca, key)
+            length = views.fmt_time(item_length(ca, key))
             lw = text_width(cr, length, 9, font=font)
             cr.save()
             cr.rectangle(12, yy, w - 32 - lw - 8, self.ROW)
             cr.clip()
-            plain_text(cr, name, 14, yy, col, 9, font=font)
+            plain_text(cr, name, 14 if kind == "src" else 20, yy, col, 9, font=font)
             cr.restore()
             plain_text(cr, length, w - 22 - lw, yy, col, 9, font=font)
         if not items and ca.pb.now and ca.pb.now.get("kind") == "station":
@@ -877,11 +1011,12 @@ class PlaylistWindow(SkinWindow):
         cr.restore()
         # scroll thumb
         n = len(items)
+        nr = len(rows)
         span = h - 58 - 18
-        f = 0 if n <= self.visible_rows() else self.top / max(1, n - self.visible_rows())
+        f = 0 if nr <= self.visible_rows() else self.top / max(1, nr - self.visible_rows())
         sk.blit(cr, "pledit", 61 if self.pressed == "scroll" else 52, 53, 8, 18, w - 15, 20 + int(f * span))
         # totals in the bottom bar
-        total = sum(item_length(ca, k) for k in items[:2000])
+        total = sum(item_length(ca, r[2]) for r in rows[:2000])
         sel_total = sum(item_length(ca, items[i]) for i in self.sel if i < n)
         info = "%s/%s" % (views.fmt_time(sel_total), views.fmt_time(total))
         cr.save()
@@ -1035,6 +1170,7 @@ class Chordamp:
         self.visible = False
         self._move = None
         self.active_part = self.main
+        self._cursors = {}
         self.stack = None
         if wayland() or os.environ.get("FOLIO_CHORD_CLASSIC_STACK"):
             self._make_stack()
@@ -1068,6 +1204,30 @@ class Chordamp:
 
     def top_window(self):
         return self.stack or self.main
+
+    def cursor(self, name):
+        """The skin's pointer by name (falling back to its normal one), at the current size."""
+        cur = self.skin.cursors.get(name) or self.skin.cursors.get("normal")
+        if not cur:
+            return None
+        key = (id(self.skin), name, self.scale)
+        c = self._cursors.get(key)
+        if c is None:
+            pb, hx, hy = cur
+            if self.scale != 1:
+                from gi.repository import GdkPixbuf
+                pb = pb.scale_simple(pb.get_width() * self.scale, pb.get_height() * self.scale, GdkPixbuf.InterpType.NEAREST)
+            c = Gdk.Cursor.new_from_pixbuf(Gdk.Display.get_default(), pb, hx * self.scale, hy * self.scale)
+            self._cursors[key] = c
+        return c
+
+    def apply_shapes(self):
+        for w in self.all_windows():
+            w.apply_shape()
+            w._cursor_name = None
+            gw = w.area.get_window()
+            if gw is not None:
+                gw.set_cursor(None)
 
     def shown(self, w):
         """Is this part (the player, equalizer or playlist editor) on screen?"""
@@ -1138,6 +1298,8 @@ class Chordamp:
             self.show_library()
         self.top_window().present()
         self.pb.engine.set_spectrum(True)
+        self.pb.engine.set_scope(self.settings.get("classic_vis") == "oscilloscope")
+        self.apply_shapes()
         if self._timer is None:
             self._timer = GLib.timeout_add(50, self._tick)
 
@@ -1154,6 +1316,7 @@ class Chordamp:
         if self._timer is not None:
             GLib.source_remove(self._timer)
             self._timer = None
+        self.pb.engine.set_scope(False)
         vis = getattr(self.win, "vis", None)
         if not (vis and vis.get_visible()):
             self.pb.engine.set_spectrum(False)
@@ -1194,6 +1357,7 @@ class Chordamp:
         old = self.main.rect()
         self.settings.set("classic_shade", sh)
         self.main.resize_to()
+        self.main.apply_shape()
         # windows docked under the player follow its new height
         dh = self.main.size()[1] * self.scale - old[3]
         for w in ((self.eq, self.pl) if self.stack is None else ()):
@@ -1214,6 +1378,7 @@ class Chordamp:
             if self.stack is None:
                 w.move(mx + (x - mx) * self.scale // old, my + (y - my) * self.scale // old)
             w.area.queue_draw()
+        self.apply_shapes()
 
     def apply_ontop(self):
         on = bool(self.settings.get("classic_ontop"))
@@ -1226,17 +1391,22 @@ class Chordamp:
 
     def set_vis(self, mode):
         self.settings.set("classic_vis", mode)
+        self.pb.engine.set_scope(self.visible and mode == "oscilloscope")
         self.main.area.queue_draw()
 
     def set_skin(self, name):
         self.skin = skinmod.by_name(name)
         self.settings.set("skin", name or "")
+        self.apply_shapes()
         for w in self.all_windows():
             w.area.queue_draw()
 
     def set_balance(self, b):
         self.pb.engine.set_balance(b)
         self.settings["balance"] = b
+        ew = getattr(self.win, "eq_win", None)
+        if ew is not None and hasattr(ew, "balance") and abs(ew.balance.get_value() - b) > 0.01:
+            ew.balance.set_value(b)
 
     def apply_eq(self, save=True):
         s = self.settings
@@ -1393,6 +1563,13 @@ class Chordamp:
     def _tick(self):
         self.main.tick()
         self.main.area.queue_draw()
+        self._ticks = getattr(self, "_ticks", 0) + 1
+        if self._ticks % 10 == 0 and self.shown(self.pl):
+            q = self.pb.queue
+            sig = (tuple(q.up_next), len(q.source), q.current)
+            if sig != getattr(self, "_pl_sig", None):      # Up Next changed from the menus or the library
+                self._pl_sig = sig
+                self.pl.area.queue_draw()
         return True
 
     # transport --------------------------------------------------------
@@ -1427,6 +1604,18 @@ class Chordamp:
         q.start(items, i)
         k = items[i]
         self.pb._start(self.pb._item_for(k))
+        self.pl.area.queue_draw()
+
+    def play_up_next(self, j):
+        """Play an Up Next entry now (double-click in the playlist editor)."""
+        q = self.pb.queue
+        if not (0 <= j < len(q.up_next)):
+            return
+        k = q.up_next.pop(j)
+        q.current = k
+        q.history.append(k)
+        self.pb._start(self.pb._item_for(k))
+        self.pl.sel_next = set()
         self.pl.area.queue_draw()
 
     def play_list(self, keys, index=0):
@@ -1615,6 +1804,12 @@ class Chordamp:
 
     def remove_selected(self):
         q = self.pb.queue
+        if self.pl.sel_next:
+            q.up_next = [k for j, k in enumerate(q.up_next) if j not in self.pl.sel_next]
+            self.pl.sel_next = set()
+            if not self.pl.sel:
+                self.pl.area.queue_draw()
+                return
         items = list(q.source)
         cur = q.current_index()
         keep = [i for i in range(len(items)) if i not in self.pl.sel]
@@ -1653,6 +1848,7 @@ class Chordamp:
             self.pl.sel = set(range(n))
         elif how == "none":
             self.pl.sel = set()
+            self.pl.sel_next = set()
         else:
             self.pl.sel = set(range(n)) - self.pl.sel
         self.pl.area.queue_draw()
