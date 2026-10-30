@@ -48,7 +48,7 @@ P = {
 APP = """<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7aa6e6"/><stop offset="0.55" stop-color="#3d6aa8"/><stop offset="1" stop-color="#26457a"/>
+      <stop offset="0" stop-color="#f06cc4"/><stop offset="0.55" stop-color="#b8187f"/><stop offset="1" stop-color="#7a0f55"/>
     </linearGradient>
     <linearGradient id="gl" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/>

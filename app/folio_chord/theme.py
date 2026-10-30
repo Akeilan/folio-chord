@@ -3,34 +3,34 @@ display in the middle, the blue-grey source list, striped song lists — in a li
 version. Every colour is set here so the desktop theme never shows through (X2-01)."""
 
 LIGHT = dict(
-    accent="#3d6aa8", accent_dark="#2c5189", accent_fg="#ffffff",
+    accent="#b8187f", accent_dark="#8f1262", accent_fg="#ffffff",
     bg="#e8e8e8", fg="#1e1e1e", dim="#5f5f5f", line="#b5b5b5",
     top1="#e4e4e4", top2="#b9b9b9", top_fg="#262626",
     lcd1="#f3f4ea", lcd2="#dfe3d0", lcd_fg="#1e2316", lcd_dim="#525a44", lcd_line="#8f9a7c",
     lcd_trough="#c3c9b1", lcd_fill="#59634a",
-    src="#dbe1ea", src_fg="#1e1e1e", src_head="#6a7280", src_sel1="#5d8ad2", src_sel2="#3d6aa8",
-    list="#ffffff", stripe="#f0f4fa", list_fg="#1e1e1e", sel="#3d6aa8", sel_fg="#ffffff",
-    sel_dim="#c9d6ea", head1="#f7f7f7", head2="#e3e3e3", head_fg="#262626",
+    src="#e6e0e6", src_fg="#1e1e1e", src_head="#77687a", src_sel1="#d23c9c", src_sel2="#b0177a",
+    list="#ffffff", stripe="#f8f0f5", list_fg="#1e1e1e", sel="#b8187f", sel_fg="#ffffff",
+    sel_dim="#efcde3", head1="#f7f7f7", head2="#e3e3e3", head_fg="#262626",
     bottom1="#dcdcdc", bottom2="#bdbdbd", btn1="#fbfbfb", btn2="#dadada", btn_fg="#262626",
-    btn_line="#9a9a9a", hover="#e9eef7", entry="#ffffff", entry_fg="#1e1e1e",
-    menu="#f7f7f7", menu_fg="#1e1e1e", menu_hover="#3d6aa8", menu_hover_fg="#ffffff",
+    btn_line="#9a9a9a", hover="#f7e8f2", entry="#ffffff", entry_fg="#1e1e1e",
+    menu="#f7f7f7", menu_fg="#1e1e1e", menu_hover="#b8187f", menu_hover_fg="#ffffff",
     browse="#ffffff", grid="#f5f5f5", tip="#fffbe6", tip_fg="#1e1e1e", scroll="#9c9c9c",
-    star="#4a4a4a", star_off="#c4c4c4", badge="#7c8ba1", badge_fg="#ffffff", vis="#000000",
+    star="#4a4a4a", star_off="#c4c4c4", badge="#a0708f", badge_fg="#ffffff", vis="#000000",
 )
 DARK = dict(
-    accent="#5b8fd9", accent_dark="#3f72bd", accent_fg="#ffffff",
+    accent="#e04aad", accent_dark="#b52a8a", accent_fg="#ffffff",
     bg="#2a2a2a", fg="#ececec", dim="#a6a6a6", line="#474747",
     top1="#4a4a4a", top2="#2e2e2e", top_fg="#ececec",
     lcd1="#20251c", lcd2="#171b13", lcd_fg="#e3edd2", lcd_dim="#a9b694", lcd_line="#4c5641",
     lcd_trough="#3a4232", lcd_fill="#c9d6b3",
-    src="#262b33", src_fg="#e6e6e6", src_head="#9aa4b4", src_sel1="#4f7fc8", src_sel2="#33609f",
-    list="#1f1f1f", stripe="#262a30", list_fg="#ececec", sel="#3f72bd", sel_fg="#ffffff",
-    sel_dim="#34465f", head1="#3a3a3a", head2="#2f2f2f", head_fg="#ececec",
+    src="#2c262c", src_fg="#e6e6e6", src_head="#b09aac", src_sel1="#c43a95", src_sel2="#97206f",
+    list="#1f1f1f", stripe="#2a2429", list_fg="#ececec", sel="#a8237d", sel_fg="#ffffff",
+    sel_dim="#4e2a44", head1="#3a3a3a", head2="#2f2f2f", head_fg="#ececec",
     bottom1="#3a3a3a", bottom2="#2a2a2a", btn1="#4b4b4b", btn2="#363636", btn_fg="#ececec",
-    btn_line="#1c1c1c", hover="#323a46", entry="#1b1b1b", entry_fg="#ececec",
-    menu="#2f2f2f", menu_fg="#ececec", menu_hover="#3f72bd", menu_hover_fg="#ffffff",
+    btn_line="#1c1c1c", hover="#3b2c37", entry="#1b1b1b", entry_fg="#ececec",
+    menu="#2f2f2f", menu_fg="#ececec", menu_hover="#a8237d", menu_hover_fg="#ffffff",
     browse="#1f1f1f", grid="#232323", tip="#3a3a32", tip_fg="#f0f0e6", scroll="#6a6a6a",
-    star="#e0e0e0", star_off="#5a5a5a", badge="#5d6b80", badge_fg="#ffffff", vis="#000000",
+    star="#e0e0e0", star_off="#5a5a5a", badge="#7d5872", badge_fg="#ffffff", vis="#000000",
 )
 
 FONT = '"Lucida Grande", "Segoe UI", "Noto Sans", "Open Sans", "Ubuntu", sans-serif'
