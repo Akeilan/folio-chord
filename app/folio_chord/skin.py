@@ -251,8 +251,8 @@ def folio():
     _panel(cr, 108, 23, 158, 13)           # song title
     _panel(cr, 108, 40, 24, 12)            # kbps
     _panel(cr, 153, 40, 16, 12)            # kHz
-    _text(cr, "kbps", 134, 49, 6, (0.6, 0.6, 0.66))
-    _text(cr, "kHz", 171, 49, 6, (0.6, 0.6, 0.66))
+    _text(cr, "kbps", 134, 49.5, 7, (0.6, 0.6, 0.66))
+    _text(cr, "kHz", 171, 49.5, 7, (0.6, 0.6, 0.66))
     _panel(cr, 14, 70, 252, 14)            # under the position bar
     cr.set_source_rgba(*ACCENT, 0.55)
     cr.rectangle(253, 91, 13, 13)
@@ -270,7 +270,7 @@ def folio():
         cr.set_source_rgb(*BODY2)
         cr.rectangle(27 + 112, y + 2, 51, 10)
         cr.fill()
-        _text(cr, "CHORDAMP", 27 + 114, y + 10, 7.5, (1, 1, 1) if focused else (0.7, 0.7, 0.75), True)
+        _text(cr, "CHORDAMP", 27 + 113, y + 10.5, 8, (1, 1, 1) if focused else (0.7, 0.7, 0.75), True)
     for y, focused in ((29, True), (42, False)):      # shade bars
         _body(cr, 27, y, 275, 14, (0.30, 0.30, 0.36) if focused else (0.22, 0.22, 0.26), (0.18, 0.18, 0.22))
     for (x, y, glyph, pressed) in ((0, 0, "o", False), (0, 9, "o", True), (9, 0, "_", False), (9, 9, "_", True),
@@ -342,7 +342,7 @@ def folio():
     cr.paint()
     for (x, w, label) in ((0, 29, "STEREO"), (29, 27, "MONO")):
         for y, on in ((0, True), (12, False)):
-            _text(cr, label, x + 2, y + 9, 6.5, LCD if on else LCD_DIM, True)
+            _text(cr, label, x + 1, y + 9.5, 6.5, LCD if on else LCD_DIM, True)
     S["monoster"] = s
     # ---- posbar.bmp
     s, cr = _new(307, 10)
@@ -380,11 +380,11 @@ def folio():
     for (x, w, label) in ((28, 47, "SHUFFLE"), (0, 28, "REP")):
         for i, (pressed, on) in enumerate(((False, False), (True, False), (False, True), (True, True))):
             _button(cr, x, i * 15, w, 15, pressed, lit=on)
-            _text(cr, label, x + 4, i * 15 + 10, 6, (1, 1, 1) if on else (0.75, 0.75, 0.8), True)
+            _text(cr, label, x + 4, i * 15 + 10.5, 6.5, (1, 1, 1) if on else (0.75, 0.75, 0.8), True)
     for (x, label) in ((0, "EQ"), (23, "PL")):
         for (dx, dy, pressed, on) in ((0, 61, False, False), (0, 73, False, True), (46, 61, True, False), (46, 73, True, True)):
             _button(cr, x + dx, dy, 23, 12, pressed, lit=on)
-            _text(cr, label, x + dx + 6, dy + 8.5, 6, (1, 1, 1) if on else (0.75, 0.75, 0.8), True)
+            _text(cr, label, x + dx + 5, dy + 9, 6.5, (1, 1, 1) if on else (0.75, 0.75, 0.8), True)
     S["shufrep"] = s
     # ---- eqmain.bmp
     s, cr = _new(275, 315)
@@ -393,15 +393,15 @@ def folio():
     _panel(cr, 86, 17, 113, 19)
     for i, hz in enumerate(("PRE", "32", "64", "125", "250", "500", "1K", "2K", "4K", "8K", "16K")):
         x = 21 if i == 0 else 78 + (i - 1) * 18
-        _text(cr, hz, x - 1, 112, 5.5, (0.65, 0.65, 0.7))
+        _text(cr, hz, x - 2, 112.5, 6, (0.65, 0.65, 0.7))
     for y, focused in ((134, True), (149, False)):
         _body(cr, 0, y, 275, 14, (0.30, 0.30, 0.36) if focused else (0.22, 0.22, 0.26), (0.18, 0.18, 0.22))
-        _text(cr, "CHORDAMP EQUALIZER", 90, y + 10, 7, (1, 1, 1) if focused else (0.7, 0.7, 0.75), True)
+        _text(cr, "CHORDAMP EQUALIZER", 86, y + 10.5, 7.5, (1, 1, 1) if focused else (0.7, 0.7, 0.75), True)
     for (x, w, label, on, pressed) in ((10, 26, "ON", False, False), (69, 26, "ON", True, False), (128, 26, "ON", False, True),
                                        (187, 26, "ON", True, True), (36, 32, "AUTO", False, False), (95, 32, "AUTO", True, False),
                                        (154, 32, "AUTO", False, True), (213, 32, "AUTO", True, True)):
         _button(cr, x, 119, w, 12, pressed, lit=on)
-        _text(cr, label, x + 4, 128, 6, (1, 1, 1) if on else (0.75, 0.75, 0.8), True)
+        _text(cr, label, x + 3, 128.5, 6.5, (1, 1, 1) if on else (0.75, 0.75, 0.8), True)
     for i in range(28):
         x, y = 13 + (i % 14) * 15, 164 + (i // 14) * 65
         cr.set_source_rgb(0.03, 0.03, 0.04)
@@ -416,7 +416,7 @@ def folio():
         _button(cr, 0, y, 11, 11, pressed, lit=True)
     for y, pressed in ((164, False), (176, True)):
         _button(cr, 224, y, 44, 12, pressed)
-        _text(cr, "PRESETS", 227, y + 9, 6, (0.9, 0.9, 0.95), True)
+        _text(cr, "PRESETS", 226, y + 9.5, 6.5, (0.9, 0.9, 0.95), True)
     cr.set_source_rgb(0.02, 0.02, 0.03)
     cr.rectangle(0, 294, 113, 19)
     cr.fill()
@@ -445,7 +445,7 @@ def folio():
             cr.rectangle(127, y + 6 + i * 2, 25, 1)
             cr.rectangle(0, y + 6 + i * 2, 25, 1)
         cr.fill()
-        _text(cr, "PLAYLIST", 46, y + 13, 7.5, (1, 1, 1) if focused else (0.7, 0.7, 0.75), True)
+        _text(cr, "PLAYLIST", 44, y + 13.5, 8, (1, 1, 1) if focused else (0.7, 0.7, 0.75), True)
         _button(cr, 153 + 14, y + 3, 9, 9)
         cr.set_source_rgb(0.9, 0.9, 0.95)
         cr.set_line_width(1)
@@ -466,10 +466,10 @@ def folio():
     _body(cr, 179, 0, 25, 38)
     for i, label in enumerate(("ADD", "REM", "SEL", "MISC")):
         _button(cr, 11 + i * 29, 72 + 10, 25, 18)
-        _text(cr, label, 13 + i * 29, 72 + 22, 6, (0.88, 0.88, 0.92), True)
+        _text(cr, label, 12 + i * 29, 72 + 22.5, 6.5, (0.88, 0.88, 0.92), True)
     _button(cr, 126 + 104, 72 + 10, 22, 18)
-    _text(cr, "LIST", 126 + 105, 72 + 22, 6, (0.88, 0.88, 0.92), True)
-    _panel(cr, 126 + 7, 72 + 10, 90, 10)
+    _text(cr, "LIST", 126 + 104, 72 + 22.5, 6.5, (0.88, 0.88, 0.92), True)
+    _panel(cr, 126 + 7, 72 + 9, 90, 12)
     S["pledit"] = s
     sk.vis = [(0, 0, 0), (0.12, 0.12, 0.14)] + [(1.0, 0.15 + 0.045 * i, 0.75 - 0.04 * i) for i in range(16)] + \
         [(0.9, 0.9, 0.95)] * 5 + [(1, 1, 1)]
