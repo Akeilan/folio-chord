@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Folio Chord" Language="1033" Version="@VERSION@" Manufacturer="Folio"
+           UpgradeCode="6B1F3E7A-2C44-4D2B-9C3E-7F0C2A9D5E41">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="Folio Chord: music, internet radio and podcasts" Comments="Folio Chord @VERSION@ for Windows"/>
+    <MajorUpgrade DowngradeErrorMessage="A newer Folio Chord is already installed."/>
+    <Media Id="1" Cabinet="chord.cab" EmbedCab="yes"/>
+    <Icon Id="ChordIcon" SourceFile="folio-chord.ico"/>
+    <Property Id="ARPPRODUCTICON" Value="ChordIcon"/>
+    <Property Id="ARPNOMODIFY" Value="1"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Folio Chord">
+          <Component Id="ChordExe" Guid="5E2C8B17-41A9-4E36-9D0B-3F7A6C1E9B24" Win64="yes">
+            <File Id="FolioChordExe" Name="FolioChord.exe" Source="FolioChord.exe" KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder"/>
+      <Directory Id="DesktopFolder"/>
+    </Directory>
+    <DirectoryRef Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="3D7B1C55-8E0A-4F6B-A1D2-5C9E7F3B2A10" Win64="yes">
+        <Shortcut Id="ChordStartMenu" Name="Folio Chord" Description="Music, internet radio and podcasts"
+                  Target="[INSTALLDIR]FolioChord.exe" WorkingDirectory="INSTALLDIR"/>
+        <RegistryValue Root="HKCU" Key="Software\Folio\Chord" Name="startmenu" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="9A2E6F41-0B3C-4D7E-8F15-6C2B9A4E7D33" Win64="yes">
+        <Shortcut Id="ChordDesktop" Name="Folio Chord" Description="Music, internet radio and podcasts"
+                  Target="[INSTALLDIR]FolioChord.exe" WorkingDirectory="INSTALLDIR"/>
+        <RegistryValue Root="HKCU" Key="Software\Folio\Chord" Name="desktop" Type="integer" Value="1" KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+    <Feature Id="Main" Title="Folio Chord" Level="1">
+      <ComponentRef Id="ChordExe"/>
+      <ComponentRef Id="StartMenuShortcut"/>
+      <ComponentRef Id="DesktopShortcut"/>
+    </Feature>
+  </Product>
+</Wix>

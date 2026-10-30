@@ -1,0 +1,39 @@
+#include <windows.h>
+#include "../src/resource.h"
+
+IDI_CHORD ICON "folio-chord.ico"
+1 RT_MANIFEST "chord.manifest"
+
+IDD_INPUT DIALOGEX 0, 0, 300, 74
+STYLE DS_MODALFRAME | DS_CENTER | DS_SHELLFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Folio Chord"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "", IDC_PROMPT, 8, 8, 284, 10
+    EDITTEXT IDC_TEXT, 8, 22, 284, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON "OK", IDOK, 186, 50, 50, 15
+    PUSHBUTTON "Cancel", IDCANCEL, 242, 50, 50, 15
+END
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 0,3,0,0
+PRODUCTVERSION 0,3,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "Folio Chord"
+      VALUE "ProductName", "Folio Chord"
+      VALUE "ProductVersion", "0.3.0"
+      VALUE "FileVersion", "0.3.0"
+      VALUE "OriginalFilename", "FolioChord.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
