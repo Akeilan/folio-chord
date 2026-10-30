@@ -337,7 +337,7 @@ class Window(Gtk.ApplicationWindow):
                 ("sub", "Create Version", [("Create AAC Version", "convert:AAC", None), ("Create MP3 Version", "convert:MP3", None),
                                            ("Create FLAC Version", "convert:FLAC", None),
                                            ("Create Apple Lossless Version", "convert:Apple Lossless", None)]),
-                ("Get Album Artwork", "na:Get Album Artwork", None)]),
+                ("Get Album Artwork", "get-artwork", None)]),
             ("_Window", [
                 ("Minimize", "minimize", "<Control>m"),
                 ("Zoom", "zoom", None),
@@ -1566,6 +1566,53 @@ class Window(Gtk.ApplicationWindow):
             self.info("Track names couldn't be looked up: %s" % e)
         net.in_thread(lambda: cd.lookup(self.cd_info["discid"]), got, fail)
         return True
+
+    def act_get_artwork(self):
+        """Covers for the selected songs' albums that have none, from the Cover Art Archive."""
+        rows = [r for r in self.selected_rows() if not r["has_art"]]
+        if not rows:
+            self.info("The selected songs already have artwork." if self.selected_rows() else "Select songs first.")
+            return None
+        albums = {}
+        for r in rows:
+            albums.setdefault((r["album"] or "", r["album_artist"] or r["artist"] or ""), []).append(r)
+        from . import net
+        self.lcd.set_busy("Getting album artwork…")
+
+        def work():
+            got = {}
+            for key in albums:
+                try:
+                    data = cd.find_artwork(*key)
+                except Exception:       # noqa: BLE001
+                    data = None
+                if data:
+                    got[key] = data
+            return got
+
+        def done(got):
+            self.lcd.set_busy(None)
+            n = 0
+            for key, data in got.items():
+                for r in albums[key]:
+                    try:
+                        from . import tags
+                        tags.set_artwork(r["path"], data)
+                        self.lib.add_file(r["path"])
+                        n += 1
+                    except Exception:       # noqa: BLE001
+                        pass
+            art._cache.clear()
+            self.lib.changed()
+            self.last_artwork = n
+            if len(got) < len(albums):
+                self.info("Artwork was found for %d of %d albums." % (len(got), len(albums)))
+
+        def fail(e):
+            self.lcd.set_busy(None)
+            self.info("Artwork couldn't be looked up: %s" % e)
+        net.in_thread(work, done, fail)
+        return list(albums)
 
     def act_convert(self, fmt):
         from . import dialogs

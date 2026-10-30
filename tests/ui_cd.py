@@ -101,6 +101,15 @@ def main():
     check(made and made[0].endswith(".mp3") and tags.read(made[0])["title"] == "Blue Train"
           and tags.read(made[0])["kind"] == "MPEG audio file", "Create MP3 Version, tags kept")
     check(len(lib.tracks("title=?", ("Blue Train",))) == 2, "the new version joins the library")
+    # Get Album Artwork (Cover Art Archive)
+    cd.COVERART = stub.base + "/caa"
+    w.load_songs()
+    w.songs.select_ids([r["id"] for r in w.rows if r["album"] in ("Night Sessions", "Loud Nineties")])
+    w.run("get-artwork")
+    ok = wait(lambda: getattr(w, "last_artwork", None) is not None, 8)
+    check(ok and w.last_artwork >= 4 and tags.artwork(songs["Lazy Bird"]) is not None and tags.artwork(songs["Grunge Waltz"]) is None,
+          "Get Album Artwork: covers for albums the archive knows", getattr(w, "last_artwork", None))
+    check("1 of 2" in getattr(w, "last_message", ""), "and says which it couldn't find", getattr(w, "last_message", ""))
     stub.stop()
 
 
