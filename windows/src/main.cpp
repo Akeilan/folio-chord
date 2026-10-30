@@ -118,6 +118,16 @@ static void background(std::function<void()> work, std::function<void()> done) {
 }
 
 static std::wstring settings_path() { return data_dir() + L"\\settings.tsv"; }
+namespace ca {
+std::wstring save_lines();
+void load(std::map<std::wstring, std::wstring> &m);
+void redraw_all();
+void switch_look(bool chordamp);
+void standard_equalizer();
+void apply_eq(bool save);
+bool owns(HWND h);
+extern bool g_visible;
+}
 
 static void save_settings() {
     std::wstring o;
@@ -132,6 +142,7 @@ static void save_settings() {
         o += L"window\t" + std::to_wstring(r.left) + L"," + std::to_wstring(r.top) + L"," + std::to_wstring(r.right) + L"," +
              std::to_wstring(r.bottom) + L"," + std::to_wstring(wp.showCmd == SW_SHOWMAXIMIZED) + L"\n";
     }
+    o += ca::save_lines();
     write_file(settings_path(), narrow(o));
 }
 
@@ -759,6 +770,7 @@ static void update_controls() {
     CheckMenuItem(menu, CMD_SHUFFLE, g_shuffle ? MF_CHECKED : MF_UNCHECKED);
     CheckMenuRadioItem(menu, CMD_REPEAT_OFF, CMD_REPEAT_ONE, CMD_REPEAT_OFF + g_repeat, MF_BYCOMMAND);
     InvalidateRect(g_lcd, nullptr, FALSE);
+    if (ca::g_visible) ca::redraw_all();
 }
 
 static void set_volume(double v) {
@@ -863,7 +875,7 @@ static HACCEL build_accels() {
         {FCONTROL | FVIRTKEY, VK_UP, CMD_VOL_UP}, {FCONTROL | FVIRTKEY, VK_DOWN, CMD_VOL_DOWN},
         {FCONTROL | FALT | FVIRTKEY, VK_DOWN, CMD_MUTE}, {FCONTROL | FVIRTKEY, 'S', CMD_SHUFFLE},
         {FCONTROL | FVIRTKEY, 'U', CMD_OPEN_STREAM}, {FCONTROL | FVIRTKEY, 'M', CMD_MINIMIZE},
-        {FVIRTKEY, VK_F1, CMD_SHORTCUTS},
+        {FVIRTKEY, VK_F1, CMD_SHORTCUTS}, {FCONTROL | FSHIFT | FVIRTKEY, 'W', CMD_CHORDAMP}, {FCONTROL | FALT | FVIRTKEY, 'E', CMD_EQUALIZER},
     };
     return CreateAcceleratorTableW(a, sizeof a / sizeof a[0]);
 }
@@ -1198,8 +1210,8 @@ static void on_command(int id) {
             break;
         case CMD_IMPORT_CD: not_here(L"Import CD"); break;
         case CMD_BURN: not_here(L"Burn Playlist to Disc"); break;
-        case CMD_CHORDAMP: not_here(L"Chordamp"); break;
-        case CMD_EQUALIZER: not_here(L"Equalizer"); break;
+        case CMD_CHORDAMP: ca::switch_look(true); break;
+        case CMD_EQUALIZER: ca::standard_equalizer(); break;
         case CMD_MINI_PLAYER: not_here(L"Mini Player"); break;
         case CMD_CONVERT: not_here(L"Create MP3 Version"); break;
         case CMD_ORGANIZE: not_here(L"Organize Music Folder"); break;
@@ -1665,6 +1677,9 @@ static LRESULT CALLBACK wnd_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
+// ================================================================ Chordamp
+#include "chordamp.inc"
+
 // ================================================================ self test (run under Wine by the release script)
 #include "selftest.inc"
 
@@ -1682,6 +1697,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     if (st.count(L"volume")) g_vol = _wtof(st[L"volume"].c_str());
     g_shuffle = st.count(L"shuffle") && st[L"shuffle"] == L"1";
     g_repeat = st.count(L"repeat") ? _wtoi(st[L"repeat"].c_str()) : 0;
+    ca::load(st);
 
     WNDCLASSEXW wc = {sizeof wc};
     wc.lpfnWndProc = wnd_proc;
@@ -1703,9 +1719,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
         }
     }
     set_volume(g_vol);
+    ca::apply_eq(false);
+    g_player->set_balance(ca::S.balance);
     fill_sources();
     update_controls();
-    ShowWindow(h, st.count(L"window") ? SW_SHOW : show);
+    if (ca::S.on) ca::switch_look(true);       // Chordamp was the look last time
+    else ShowWindow(h, st.count(L"window") ? SW_SHOW : show);
     // files given on the command line (Open with Folio Chord): added and played
     std::vector<std::wstring> files;
     for (int i = 1; i < argc; i++) files.push_back(argv[i]);
@@ -1714,6 +1733,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     HACCEL acc = build_accels();
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (ca::owns(msg.hwnd)) {               // Chordamp's windows have keys of their own
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            continue;
+        }
         // Space plays and pauses, except while typing in the search box
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_SPACE && msg.hwnd != g_search && GetFocus() != g_search &&
             !(GetKeyState(VK_CONTROL) & 0x8000)) {

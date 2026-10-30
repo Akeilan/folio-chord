@@ -23,9 +23,16 @@ static void pump(DWORD ms) {
     }
 }
 
+static void snapshot_rect(RECT rc, const std::wstring &path, HWND front);
 static void snapshot(const std::wstring &path) {
     RECT rc;
     GetWindowRect(g_wnd, &rc);
+    snapshot_rect(rc, path, g_wnd);
+}
+
+static void snapshot_rect(RECT rc, const std::wstring &path, HWND front) {
+    RECT scr{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+    IntersectRect(&rc, &rc, &scr);           // Wine copies nothing when the area runs off the screen
     int w = rc.right - rc.left, h = rc.bottom - rc.top;
     HDC screen = GetDC(nullptr), mem = CreateCompatibleDC(screen);
     BITMAPINFO bi = {};
@@ -34,8 +41,8 @@ static void snapshot(const std::wstring &path) {
     HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
     HGDIOBJ old = SelectObject(mem, bmp);
     // what's on the screen where the window is (PrintWindow leaves child windows out under Wine)
-    SetForegroundWindow(g_wnd);
-    RedrawWindow(g_wnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    SetForegroundWindow(front);
+    RedrawWindow(front, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     pump(150);
     BitBlt(mem, 0, 0, w, h, screen, rc.left, rc.top, SRCCOPY | CAPTUREBLT);
     BITMAPFILEHEADER fh = {0x4D42, (DWORD)(sizeof fh + sizeof bi.bmiHeader + w * h * 4), 0, 0, sizeof fh + sizeof bi.bmiHeader};
@@ -63,6 +70,8 @@ static const char *RSS =
     "<item><title><![CDATA[Episode 1]]></title><pubDate>Mon, 07 Sep 2026 10:00:00 +0000</pubDate>"
     "<itunes:duration>125</itunes:duration><enclosure url='http://x/1.mp3' type='audio/mpeg' length='1'/></item>"
     "<item><title>No audio</title></item></channel></rss>";
+
+#include "selftest_chordamp.inc"
 
 static int selftest(const std::wstring &report, const std::wstring &music) {
     g_report = _wfopen(report.c_str(), L"w");
@@ -230,10 +239,11 @@ static int selftest(const std::wstring &report, const std::wstring &music) {
     check(g_src == SRC_PODCASTS && g_rows.size() == 1, "Podcasts lists the shows");
     // every menu command runs (dialogs that need a person are answered by the self test)
     int ran = 0;
-    for (int id : {CMD_GO_CURRENT, CMD_IMPORT_CD, CMD_BURN, CMD_CHORDAMP, CMD_EQUALIZER, CMD_MINI_PLAYER, CMD_CONVERT,
+    for (int id : {CMD_GO_CURRENT, CMD_IMPORT_CD, CMD_BURN, CMD_MINI_PLAYER, CMD_CONVERT,
                    CMD_ORGANIZE, CMD_STORE_SEARCH, CMD_STORE_SIGNIN, CMD_ABOUT, CMD_SHORTCUTS, CMD_MUTE, CMD_MUTE, CMD_PREV,
                    CMD_NEXT, CMD_STOP}) { on_command(id); ran++; }
-    check(ran == 17, "the menu commands run without trouble");
+    check(ran == 15, "the menu commands run without trouble");
+    chordamp_tests(h, music, outdir);
     // dark
     g_dark = true;
     apply_colours();
