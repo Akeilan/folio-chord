@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.folio.Chord</id>
+  <name>Folio Chord</name>
+  <summary>Music, internet radio and podcasts</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <description>
+    <p>A music player in the manner of the classic iTunes: a library with the column browser,
+    playlists and Smart Playlists, the status display, Mini Player and equalizer; internet radio
+    from the radio-browser.info directory; podcasts from Apple's public directory or Podcast Index;
+    CD import and burning.</p>
+  </description>
+  <launchable type="desktop-id">org.folio.Chord.desktop</launchable>
+</component>

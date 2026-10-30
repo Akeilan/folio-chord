@@ -49,7 +49,7 @@ CSS = """
 /* menu bar and menus */
 menubar.chord-menubar { background-color: %(top1)s; background-image: none; border-bottom: 1px solid %(line)s;
   padding: 0; box-shadow: none; }
-menubar.chord-menubar > menuitem { padding: 3px 9px; color: %(top_fg)s; }
+menubar.chord-menubar > menuitem { padding: 3px 9px; color: %(top_fg)s; background-color: %(top1)s; background-image: none; }
 menubar.chord-menubar > menuitem label { color: %(top_fg)s; }
 menubar.chord-menubar > menuitem:hover { background-color: %(menu_hover)s; }
 menubar.chord-menubar > menuitem:hover label { color: %(menu_hover_fg)s; }
@@ -129,8 +129,12 @@ button.chord-flat label { color: %(fg)s; }
 .chord-art-pane label { color: %(src_head)s; }
 
 /* song lists, browser, grids */
-.chord-own treeview.view { background-color: %(list)s; color: %(list_fg)s; }
-.chord-own treeview.view:selected, .chord-own treeview.view:selected:focus { background-color: %(sel)s; color: %(sel_fg)s; }
+.chord-own treeview.view, .chord-dialog treeview.view, popover.chord-pop treeview.view { background-color: %(list)s; color: %(list_fg)s; }
+.chord-own treeview.view:selected, .chord-own treeview.view:selected:focus,
+.chord-dialog treeview.view:selected, .chord-dialog treeview.view:selected:focus { background-color: %(sel)s; color: %(sel_fg)s; }
+.chord-dialog treeview.view header button { background-image: none; background-color: %(head2)s; color: %(head_fg)s; border: none;
+  border-bottom: 1px solid %(line)s; box-shadow: none; }
+.chord-dialog treeview.view header button label { color: %(head_fg)s; }
 .chord-own treeview.view.chord-source:selected { background-color: %(src_sel2)s; }
 .chord-own treeview.view header button { background-image: linear-gradient(to bottom, %(head1)s, %(head2)s);
   background-color: %(head2)s; color: %(head_fg)s; border: none; border-right: 1px solid %(line)s; border-bottom: 1px solid %(line)s;
