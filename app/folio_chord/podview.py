@@ -183,6 +183,7 @@ class PodcastsView(Gtk.Box):
     # ---------------------------------------------------------------- your shows
     def refresh(self):
         sel = self.current_show()
+        self._keep_eps = self.selected_episodes()
         self.show_store.clear()
         shows = self.pods.shows()
         ph = art.placeholder(40, self.win.dark)
@@ -216,10 +217,11 @@ class PodcastsView(Gtk.Box):
 
     def fill_episodes(self):
         pid = self.current_show()
-        sel = self.selected_episodes()
+        sel = self.selected_episodes() or getattr(self, "_keep_eps", [])
         self.ep_store.clear()
         if pid is None:
             return
+        self._keep_eps = []
         q = self.query
         for e in self.pods.episodes(pid):
             if q and q not in (e["title"] or "").lower() and q not in P.plain(e["description"]).lower():

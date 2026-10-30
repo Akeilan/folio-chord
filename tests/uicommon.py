@@ -13,6 +13,11 @@ OUT = os.environ.get("UI_OUT", "/tmp/ui_out")
 os.makedirs(OUT, exist_ok=True)
 FAILS = []
 N = [0]
+try:        # messages are answered at once in the tests (each is still recorded as win.last_message)
+    from folio_chord import dialogs as _d
+    _d.RESPONSE.setdefault("Folio Chord", 1)
+except Exception:
+    pass
 
 
 def check(ok, what, info=None):

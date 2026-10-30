@@ -52,11 +52,26 @@ class Stub:
                 if u.path.startswith("/stream/"):
                     return stub.stream(self)
                 body, ctype, code = stub.route(u.path, q, self.headers)
+                rng = self.headers.get("Range")
+                start, end = 0, len(body) - 1
+                if rng and code == 200 and u.path.startswith("/ep/"):
+                    a, _, b = rng.replace("bytes=", "").partition("-")
+                    start = int(a or 0)
+                    end = int(b) if b else len(body) - 1
+                    code = 206
                 self.send_response(code)
                 self.send_header("Content-Type", ctype)
+                if u.path.startswith("/ep/"):
+                    self.send_header("Accept-Ranges", "bytes")
+                if code == 206:
+                    self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, len(body)))
+                    body = body[start:end + 1]
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
         self.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.base = "http://127.0.0.1:%d" % self.srv.server_address[1]
@@ -169,4 +184,14 @@ class Stub:
                 return b'{"status":"false"}', "application/json", 401
             return self.j({"feeds": [{"id": 77, "title": "Tech Show", "author": "Tech Media", "url": b + "/feed/tech",
                                       "artwork": b + "/art/tech.png", "categories": {"102": "Technology"}, "episodeCount": 3}]})
+        if path.startswith("/mb/discid/"):
+            if path.endswith("/unknown"):
+                return self.j({"releases": []})
+            return self.j({"releases": [{"title": "Fake Disc", "date": "2001-05-01",
+                                         "artist-credit": [{"name": "Test Band", "joinphrase": ""}],
+                                         "media": [{"position": 1, "discs": [{"id": path.split("/")[-1]}],
+                                                    "tracks": [{"title": "Opening"}, {"title": "Middle",
+                                                                "artist-credit": [{"name": "Test Band", "joinphrase": " feat. "},
+                                                                                  {"name": "Guest", "joinphrase": ""}]},
+                                                               {"title": "Closing"}]}]}]})
         return b"not found", "text/plain", 404

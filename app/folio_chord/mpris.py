@@ -85,7 +85,7 @@ class Mpris:
         if not n:
             return {}
         tid = n.get("id")
-        md = {"mpris:trackid": GLib.Variant("o", "/org/folio/chord/%s/%s" % (n.get("kind", "song"), tid) if isinstance(tid, int)
+        md = {"mpris:trackid": GLib.Variant("o", "/org/folio/chord/%s/%s" % (n.get("kind", "song"), tid) if isinstance(tid, int) and tid >= 0
                                             else "/org/folio/chord/stream"),
               "xesam:title": GLib.Variant("s", self._pb().stream_title or n.get("title") or ""),
               "xesam:artist": GLib.Variant("as", [n.get("artist") or ""]),

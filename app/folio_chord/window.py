@@ -1409,6 +1409,7 @@ class Window(Gtk.ApplicationWindow):
         from . import extras
         if self.vis is None:
             self.vis = extras.Visualizer(self)
+        self.vis.show_all()
         self.vis.present()
         return self.vis
 
@@ -1458,7 +1459,7 @@ class Window(Gtk.ApplicationWindow):
         if not n:
             return False
         if n["kind"] == "song":
-            if not self.songs.select_ids([n["id"]]):
+            if self.source[0] not in ("music", "playlist", "smart", "folder") or not self.songs.select_ids([n["id"]]):
                 self.source = ("music", None)
                 self.select_source("music")
                 self.songs.select_ids([n["id"]])
