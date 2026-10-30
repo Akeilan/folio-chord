@@ -990,7 +990,7 @@ def burn(win, name, rows):
     elif not cd.fits(total):
         warn.set_text("These songs are longer than an 80-minute CD.")
     d.body.pack_start(warn, False, False, 0)
-    d.dev, d.audio, d.gap = dev, audio, gap
+    d.dev, d.audio, d.data, d.gap = dev, audio, data, gap
     r = d.ask()
     kind = "audio" if audio.get_active() else "data"
     gp = int(gap.get_active_id() or 0)

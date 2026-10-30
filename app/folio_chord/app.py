@@ -250,8 +250,9 @@ class Playback:
         elif ev == "error" and val:
             item, msg = val
             self._emit("error", "“%s” couldn't be played: %s" % ((item or {}).get("title", ""), msg))
-            if item and item.get("kind") == "song":
+            if item and item.get("kind") == "song" and self.queue.order:
                 GLib.timeout_add(300, lambda: (self.next(), False)[1])
+            return
         self._emit(ev, val)
 
     def _save_position(self):

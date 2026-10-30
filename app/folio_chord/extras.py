@@ -201,9 +201,17 @@ class Visualizer(Gtk.Window):
         return False
 
     def feed(self, mags):
+        """256 linear bands (0 to 22 kHz) folded into 32 on a log scale, as the ear hears them."""
         n = len(self.levels)
-        for i in range(min(n, len(mags))):
-            v = max(0.0, min(1.0, (mags[i] + 70) / 70.0))
+        m = len(mags)
+        if not m:
+            return
+        lo, hi = math.log(1.0), math.log(float(m))
+        for i in range(n):
+            a = int(math.exp(lo + (hi - lo) * i / n))
+            b = max(a + 1, int(math.exp(lo + (hi - lo) * (i + 1) / n)))
+            v = max(mags[a:b])
+            v = max(0.0, min(1.0, (v + 70) / 70.0))
             self.levels[i] = max(v, self.levels[i] * 0.85)
             self.peaks[i] = max(self.peaks[i] * 0.97, self.levels[i])
 

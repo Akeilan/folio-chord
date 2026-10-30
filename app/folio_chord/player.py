@@ -75,7 +75,7 @@ class _Pipe:
         self.eq = Gst.ElementFactory.make("equalizer-10bands")
         conv2 = Gst.ElementFactory.make("audioconvert")
         self.spec = Gst.ElementFactory.make("spectrum")
-        self.spec.set_property("bands", 32)
+        self.spec.set_property("bands", 256)
         self.spec.set_property("threshold", -70)
         self.spec.set_property("interval", 50 * Gst.MSECOND)
         self.spec.set_property("post-messages", False)

@@ -62,8 +62,9 @@ def in_thread(work, done=None, error=None):
         try:
             res = work()
         except Exception as e:      # noqa: BLE001
+            err = e
             if error:
-                GLib.idle_add(lambda: (error(e), False)[1])
+                GLib.idle_add(lambda: (error(err), False)[1])
             return
         if done:
             GLib.idle_add(lambda: (done(res), False)[1])
