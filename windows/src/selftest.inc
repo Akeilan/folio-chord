@@ -128,6 +128,33 @@ static int selftest(const std::wstring &report, const std::wstring &music) {
         check(back.playlists.size() == 1 && back.playlists[0].name == L"Road trip\twith tab" && back.playlists[0].tracks.size() == 2,
               "and playlists");
         check(back.folders.size() == 1, "and the folders added (for Check Music Folders Again)");
+
+        // ---- Sound Check (N3-08): a loud and a quiet tone, 14 dB apart
+        auto tone = [&](const std::wstring &name, double amp) {
+            std::wstring p = outdir + L"\\" + name;
+            const int rate = 44100, secs = 3, n = rate * secs;
+            std::string w = "RIFF";
+            auto u32 = [&](uint32_t v) { for (int k = 0; k < 4; k++) w += (char)((v >> (8 * k)) & 255); };
+            auto u16 = [&](uint16_t v) { w += (char)(v & 255); w += (char)(v >> 8); };
+            u32(36 + n * 2); w += "WAVEfmt "; u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16);
+            w += "data"; u32(n * 2);
+            for (int i = 0; i < n; i++) u16((uint16_t)(int16_t)std::lround(amp * 32767 * std::sin(2 * 3.14159265358979 * 440 * i / rate)));
+            write_file(p, w);
+            return p;
+        };
+        double loud = 99, quiet = 99;
+        bool m1 = measure_loudness(tone(L"sc-loud.wav", 0.5), loud);
+        bool m2 = measure_loudness(tone(L"sc-quiet.wav", 0.1), quiet);
+        wchar_t sc[96];
+        swprintf(sc, 96, L"loud %.2f dB, quiet %.2f dB", loud, quiet);
+        check(m1 && m2 && std::fabs((quiet - loud) - 13.98) < 0.5, "Sound Check: a song 14 dB quieter gets 14 dB more", sc);
+        check(m1 && std::fabs(loud - (-18.0 + 9.03)) < 0.5, "Sound Check: songs are brought to one level", sc);
+        back.tracks[0].gain = loud;
+        back.save();
+        Library again2;
+        again2.load();
+        check(again2.tracks[0].measured() && std::fabs(again2.tracks[0].gain - loud) < 0.01 && !again2.tracks.back().measured(),
+              "Sound Check: measured songs are kept, the rest measured later");
         back.remove({back.tracks[0].id});
         check(back.tracks.size() == lib.tracks.size() - 1 && back.playlists[0].tracks.size() == 1, "removing a song takes it out of playlists too");
     }

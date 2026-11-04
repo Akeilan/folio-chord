@@ -6,6 +6,7 @@
 #include "common.h"
 #include <mfplay.h>
 #include <atomic>
+#include <cmath>
 #include <mutex>
 #include <thread>
 
@@ -90,6 +91,9 @@ public:
 
     bool output_ok() const { return have_output; } // a sound device was found (else it plays silently, in time)
 
+    // Sound Check (N3-08): a gain in dB for the song that plays (0 = as recorded)
+    void set_sound_check(double db) { sc_gain = std::pow(10.0, db / 20.0); }
+
 private:
     HWND hwnd;
     MfPlayer *mf = nullptr;
@@ -104,6 +108,7 @@ private:
     std::atomic<int> generation{0};
     double dur = 0;
     std::atomic<double> pos_secs{0};
+    std::atomic<double> sc_gain{1.0};
     int src_rate = 0, src_channels = 0;
     bool have_output = true;
     // sound shaping
@@ -123,3 +128,7 @@ private:
 public:
     void fallback(int gen, const std::wstring &url);   // on the window's thread
 };
+
+// Sound Check (N3-08): how loud a song is, as the gain (dB) that brings it to Chord's common level.
+// Decodes the whole file (up to 15 minutes) through Media Foundation; false when it can't be read.
+bool measure_loudness(const std::wstring &path, double &gain_db);

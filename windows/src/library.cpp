@@ -102,6 +102,7 @@ void Library::load() {
             t.plays = _wtoi(f[13].c_str());
             t.last_played = _wtoi64(f[14].c_str());
             t.added = _wtoi64(f[15].c_str());
+            if (f.size() > 16 && !f[16].empty()) t.gain = _wtof(f[16].c_str());
             tracks.push_back(t);
             next_id = std::max(next_id, t.id + 1);
         }
@@ -122,6 +123,14 @@ void Library::load() {
     }
 }
 
+// Sound Check gain as saved (empty when not measured yet)
+static std::wstring gain_text(const Track &t) {
+    if (!t.measured()) return L"";
+    wchar_t g[32];
+    swprintf(g, 32, L"%.2f", t.gain);
+    return g;
+}
+
 void Library::save() {
     std::lock_guard<std::recursive_mutex> g(lock);
     std::wstring o = widen(HEADER) + L"\n";
@@ -133,7 +142,7 @@ void Library::save() {
              tsv_escape(t.genre) + L"\t" + std::to_wstring(t.year) + L"\t" + std::to_wstring(t.track_no) + L"\t" +
              std::to_wstring(t.disc_no) + L"\t" + std::to_wstring(t.bitrate) + L"\t" + num + L"\t" +
              std::to_wstring(t.rating) + L"\t" + std::to_wstring(t.plays) + L"\t" + std::to_wstring(t.last_played) +
-             L"\t" + std::to_wstring(t.added) + L"\t\n";
+             L"\t" + std::to_wstring(t.added) + L"\t" + gain_text(t) + L"\n";
     }
     write_file(dir + L"\\library.tsv", narrow(o));
     std::wstring p;
