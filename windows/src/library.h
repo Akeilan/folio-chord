@@ -10,6 +10,8 @@ struct Track {
     double duration = 0;                                    // seconds
     int rating = 0, plays = 0;                              // rating 0..100 (20 a star)
     long long last_played = 0, added = 0;                   // Unix seconds
+    double gain = 1e9;                                      // Sound Check (N3-08): dB to apply; 1e9 = not measured yet
+    bool measured() const { return gain < 1e8; }
 };
 
 struct Playlist {

@@ -2,6 +2,7 @@
 
 // ---- MfPlayer: the plain Media Foundation player, kept for streams the decoder below can't open
 #include <mfapi.h>
+#include <algorithm>
 #include <propvarutil.h>
 
 MfPlayer::MfPlayer(HWND notify) : hwnd(notify) {}
@@ -530,11 +531,12 @@ void Player::run(std::wstring url, int gen) {
                     }
                 }
                 float *p = nb.data() + keep;
+                const double sc = sc_gain.load();
                 double bl = bal, gl = bl > 0 ? 1 - bl : 1, gr = bl < 0 ? 1 + bl : 1;
                 for (int i = 0; i < frames; i++) {
                     double mono = 0;
                     for (UINT32 c = 0; c < ch; c++) {
-                        double x = p[i * ch + c] * pre;
+                        double x = p[i * ch + c] * pre * sc;
                         if (eq_on) {
                             int cc = (int)std::min<UINT32>(c, 7);
                             for (int b = 0; b < 10; b++) {
@@ -665,4 +667,89 @@ void Player::run(std::wstring url, int gen) {
     if (mix) CoTaskMemFree(mix);
     release(want); release(got); release(reader);
     g_workers--;
+}
+
+
+// ---------------------------------------------------------------- Sound Check (N3-08)
+
+// Loudness as ReplayGain measures it: the mean square of each 50 ms block, then the block 95%
+// of the way up (so quiet passages don't count); the gain brings that to the reference level.
+static const double SC_REFERENCE_DB = -18.0;   // dBFS (RMS) a song is brought to
+
+bool measure_loudness(const std::wstring &path, double &gain_db) {
+    // Media Foundation counts its users: this works from any thread, before or after the player.
+    if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) return false;
+    struct Down { ~Down() { MFShutdown(); } } down;
+    IMFSourceReader *r = nullptr;
+    if (FAILED(MFCreateSourceReaderFromURL(path.c_str(), nullptr, &r))) return false;
+    IMFMediaType *want = nullptr;
+    MFCreateMediaType(&want);
+    want->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    want->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
+    HRESULT hr = r->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, nullptr, want);
+    want->Release();
+    IMFMediaType *cur = nullptr;
+    UINT32 ch = 2, rate = 44100;
+    if (SUCCEEDED(hr) && SUCCEEDED(r->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, &cur))) {
+        cur->GetUINT32(MF_MT_AUDIO_NUM_CHANNELS, &ch);
+        cur->GetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, &rate);
+        cur->Release();
+    } else {
+        r->Release();
+        return false;
+    }
+    if (ch == 0 || rate == 0) {
+        r->Release();
+        return false;
+    }
+    const size_t block = rate / 20;
+    const size_t limit = (size_t)rate * 60 * 15;
+    std::vector<double> blocks;
+    double acc = 0;
+    size_t n = 0, frames_done = 0;
+    for (;;) {
+        DWORD flags = 0;
+        IMFSample *sample = nullptr;
+        if (FAILED(r->ReadSample((DWORD)MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0, nullptr, &flags, nullptr, &sample))) break;
+        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
+            if (sample) sample->Release();
+            break;
+        }
+        if (!sample) continue;
+        IMFMediaBuffer *mb = nullptr;
+        if (SUCCEEDED(sample->ConvertToContiguousBuffer(&mb))) {
+            BYTE *data = nullptr;
+            DWORD len = 0;
+            if (SUCCEEDED(mb->Lock(&data, nullptr, &len))) {
+                const float *f = (const float *)data;
+                size_t frames = len / (ch * 4);
+                for (size_t i = 0; i < frames; i++) {
+                    double s = 0;
+                    for (UINT32 c = 0; c < ch; c++) s += (double)f[i * ch + c] * f[i * ch + c];
+                    acc += s / ch;
+                    if (++n == block) {
+                        blocks.push_back(acc / n);
+                        acc = 0;
+                        n = 0;
+                    }
+                }
+                frames_done += frames;
+                mb->Unlock();
+            }
+            mb->Release();
+        }
+        sample->Release();
+        if (frames_done > limit) break;
+    }
+    r->Release();
+    if (blocks.empty()) return false;
+    std::sort(blocks.begin(), blocks.end());
+    double v = blocks[std::min(blocks.size() - 1, (size_t)(blocks.size() * 0.95))];
+    if (v < 1e-10) {
+        gain_db = 0;                       // silence: leave it alone
+        return true;
+    }
+    double loud = 10.0 * std::log10(v);
+    gain_db = std::max(-15.0, std::min(10.0, SC_REFERENCE_DB - loud));
+    return true;
 }

@@ -30,7 +30,7 @@ enum {
     CMD_CHORDAMP = 1200, CMD_GO_CURRENT,
     // Controls
     CMD_PLAY_PAUSE = 1300, CMD_STOP, CMD_NEXT, CMD_PREV, CMD_VOL_UP, CMD_VOL_DOWN, CMD_MUTE, CMD_SHUFFLE,
-    CMD_REPEAT_OFF, CMD_REPEAT_ALL, CMD_REPEAT_ONE,
+    CMD_REPEAT_OFF, CMD_REPEAT_ALL, CMD_REPEAT_ONE, CMD_SOUND_CHECK,
     // Store (as on Linux: not part of Folio)
     CMD_STORE_SEARCH = 1400, CMD_STORE_SIGNIN,
     // Advanced
@@ -70,6 +70,8 @@ static int g_pos = -1;
 static QItem g_now;
 static bool g_has_now = false, g_shuffle = false, g_dark = false, g_muted = false;
 static int g_repeat = 0;            // 0 off, 1 all, 2 one
+static bool g_sound_check = false;  // N3-08: songs play at one loudness
+static std::atomic<bool> g_measuring{false};
 static double g_vol = 0.8, g_vol_before_mute = 0.8;
 static int g_src = SRC_MUSIC, g_src_id = 0;
 static std::vector<Row> g_rows;
@@ -136,6 +138,7 @@ static void save_settings() {
     o += L"volume\t" + std::wstring(v) + L"\n";
     o += L"shuffle\t" + std::to_wstring(g_shuffle) + L"\n";
     o += L"repeat\t" + std::to_wstring(g_repeat) + L"\n";
+    o += L"soundcheck\t" + std::to_wstring(g_sound_check) + L"\n";
     WINDOWPLACEMENT wp = {sizeof wp};
     if (g_wnd && GetWindowPlacement(g_wnd, &wp)) {
         RECT &r = wp.rcNormalPosition;
@@ -239,9 +242,52 @@ static void make_order(int first) {
     }
 }
 
+// Sound Check (N3-08): the gain for what's about to play (0 dB for streams, unmeasured songs or off)
+static void apply_sound_check(const QItem &q) {
+    double db = 0;
+    if (g_sound_check && q.kind == 1) {
+        std::lock_guard<std::recursive_mutex> g(g_lib.lock);
+        if (Track *t = g_lib.find(q.id))
+            if (t->measured()) db = t->gain;
+    }
+    g_player->set_sound_check(db);
+}
+
+// Measure the songs Sound Check doesn't know yet, one after another, off the window's thread.
+static void measure_songs() {
+    if (g_measuring.exchange(true)) return;
+    std::thread([]() {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        for (int done = 0;; done++) {
+            int id = 0;
+            std::wstring path;
+            {
+                std::lock_guard<std::recursive_mutex> g(g_lib.lock);
+                for (auto &t : g_lib.tracks)
+                    if (!t.measured()) { id = t.id; path = t.path; break; }
+            }
+            if (!id) break;
+            double db = 0;
+            bool ok = measure_loudness(path, db);
+            {
+                std::lock_guard<std::recursive_mutex> g(g_lib.lock);
+                if (Track *t = g_lib.find(id)) t->gain = ok ? db : 0.0;
+                if (done % 25 == 24) g_lib.save();
+            }
+        }
+        {
+            std::lock_guard<std::recursive_mutex> g(g_lib.lock);
+            g_lib.save();
+        }
+        CoUninitialize();
+        g_measuring = false;
+    }).detach();
+}
+
 static void start(const QItem &q) {
     g_now = q;
     g_has_now = true;
+    apply_sound_check(q);
     std::wstring url = q.url;
     if (q.kind == 3) {
         // a station given as a playlist: open the stream inside it (off the window's thread)
@@ -768,6 +814,7 @@ static void update_controls() {
     InvalidateRect(g_play, nullptr, FALSE);
     HMENU menu = GetMenu(g_wnd);
     CheckMenuItem(menu, CMD_SHUFFLE, g_shuffle ? MF_CHECKED : MF_UNCHECKED);
+    CheckMenuItem(menu, CMD_SOUND_CHECK, g_sound_check ? MF_CHECKED : MF_UNCHECKED);
     CheckMenuRadioItem(menu, CMD_REPEAT_OFF, CMD_REPEAT_ONE, CMD_REPEAT_OFF + g_repeat, MF_BYCOMMAND);
     InvalidateRect(g_lcd, nullptr, FALSE);
     if (ca::g_visible) ca::redraw_all();
@@ -832,6 +879,8 @@ static HMENU build_menu() {
     add(rep, CMD_REPEAT_ALL, L"&All");
     add(rep, CMD_REPEAT_ONE, L"O&ne");
     AppendMenuW(c, MF_POPUP, (UINT_PTR)rep, L"R&epeat");
+    sep(c);
+    add(c, CMD_SOUND_CHECK, L"Sound Chec&k");
     AppendMenuW(bar, MF_POPUP, (UINT_PTR)c, L"&Controls");
     HMENU s = CreatePopupMenu();
     add(s, CMD_STORE_SEARCH, L"Search the Store");
@@ -902,6 +951,7 @@ static void add_paths(std::vector<std::wstring> paths, bool play) {
         [ids, play]() {
             g_busy.clear();
             fill_list();
+            if (g_sound_check) measure_songs();
             flash(std::to_wstring(ids->size()) + (ids->size() == 1 ? L" song" : L" songs") + L" added");
             if (play && !ids->empty()) {
                 std::vector<QItem> items;
@@ -1142,6 +1192,14 @@ static void on_command(int id) {
             save_settings();
             break;
         }
+        case CMD_SOUND_CHECK:
+            g_sound_check = !g_sound_check;
+            if (g_has_now) apply_sound_check(g_now);
+            if (g_sound_check) measure_songs();
+            update_controls();
+            save_settings();
+            flash(g_sound_check ? L"Sound Check is on: songs play at the same loudness." : L"Sound Check is off.");
+            break;
         case CMD_REPEAT_OFF: case CMD_REPEAT_ALL: case CMD_REPEAT_ONE:
             g_repeat = id - CMD_REPEAT_OFF;
             update_controls();
@@ -1697,7 +1755,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     if (st.count(L"volume")) g_vol = _wtof(st[L"volume"].c_str());
     g_shuffle = st.count(L"shuffle") && st[L"shuffle"] == L"1";
     g_repeat = st.count(L"repeat") ? _wtoi(st[L"repeat"].c_str()) : 0;
+    g_sound_check = st.count(L"soundcheck") && st[L"soundcheck"] == L"1";
     ca::load(st);
+    if (g_sound_check) measure_songs();
 
     WNDCLASSEXW wc = {sizeof wc};
     wc.lpfnWndProc = wnd_proc;

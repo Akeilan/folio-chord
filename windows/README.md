@@ -12,6 +12,11 @@ Needs the MinGW-w64 cross compiler and msitools from the Ubuntu archive
 Checks: `FolioChord.exe --selftest <report.txt> <music folder>` runs the library, feed and window
 checks and saves pictures of the window next to the report (the release runs it under Wine).
 
+## 0.4.1
+
+- Sound Check (Controls > Sound Check): songs play at the same loudness. Each song is measured once, in the
+  background, the way ReplayGain measures it (50 ms blocks, the loudest 5% left out), and brought to one level.
+
 ## 0.4.0
 
 - Chordamp: View > Look: Chordamp (Ctrl+Shift+W). The classic small player, equalizer and playlist editor, docking and
