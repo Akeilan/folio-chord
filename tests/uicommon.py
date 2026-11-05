@@ -74,6 +74,7 @@ def finish():
     print("%d checks, %d failed" % (N[0], len(FAILS)))
     print("UI all passed" if not FAILS else "UI FAILS: " + "; ".join(FAILS))
     sys.stdout.flush()
+    sys.stdout.flush()
     os._exit(1 if FAILS else 0)
 
 
