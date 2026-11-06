@@ -16,6 +16,9 @@ internet radio and podcasts. Part of Folio Studio.
 - **Podcasts**: Apple's public podcast directory (no sign-in; search, and the charts by country and
   category), or Podcast Index with your own free API key. Subscriptions, automatic downloads,
   played marks, resume, show notes, OPML import and export.
+- **Home Sharing**: share your library with the other Folio Chords on your own network, under a
+  name and an optional passcode, and play from theirs — their playlists included. No account, and
+  nothing leaves your network. A shared library can be listened to, not changed.
 - **CDs**: import as AAC, Apple Lossless, MP3, FLAC or WAV with track names from MusicBrainz; burn
   a playlist to an audio or data CD (wodim). Album covers from the Cover Art Archive.
 
@@ -26,6 +29,7 @@ sent anywhere except the requests to the directories above when you use them.
 
     cd app && python3 -m folio_chord
     python3 tests/test_engine.py; python3 tests/test_net.py        # engine, radio and podcasts
+    python3 tests/test_sharing.py                                  # Home Sharing
     sh tests/run_ui.sh ui_library.py                               # UI tests, on an X display
     sh tests/theme_run.sh                                          # desktop themes (X2-01)
     sh build-deb.sh out/                                           # the package

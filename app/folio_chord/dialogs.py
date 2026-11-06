@@ -91,6 +91,45 @@ def choose(win, text, detail, options):
     return options[0][1]
 
 
+def sharing(win, on, name, code):
+    """Share My Library (C4-01): whether to share, under what name, and the passcode to ask for.
+    Returns (on, name, passcode), or (None, name, code) if it was cancelled."""
+    from . import sharing as sh
+    d = Dialog(win, "Home Sharing", (("Cancel", Gtk.ResponseType.CANCEL), ("OK", Gtk.ResponseType.OK)))
+    t = Gtk.Label(xalign=0)
+    t.set_markup("<b>Share my library on this network</b>")
+    d.body.pack_start(t, False, False, 0)
+    chk = Gtk.CheckButton(label="Other Folio Chords on this network can see and play my songs")
+    chk.set_active(bool(on))
+    d.body.pack_start(chk, False, False, 0)
+    g = Gtk.Grid(column_spacing=8, row_spacing=6)
+    g.attach(Gtk.Label(label="Shared name:", xalign=0), 0, 0, 1, 1)
+    e_name = Gtk.Entry()
+    e_name.set_width_chars(26)
+    e_name.set_placeholder_text(sh.default_name())
+    e_name.set_text(name or "")
+    g.attach(e_name, 1, 0, 1, 1)
+    g.attach(Gtk.Label(label="Passcode:", xalign=0), 0, 1, 1, 1)
+    e_code = Gtk.Entry()
+    e_code.set_visibility(False)
+    e_code.set_text(code or "")
+    e_code.set_placeholder_text("none")
+    g.attach(e_code, 1, 1, 1, 1)
+    d.body.pack_start(g, False, False, 0)
+    note = Gtk.Label(xalign=0)
+    note.set_markup("<small>Nothing leaves this network and no account is needed. The songs are "
+                    "streamed as they are; the other computer cannot change your library.</small>")
+    note.set_line_wrap(True)
+    d.body.pack_start(note, False, False, 0)
+    d.show_all()
+    r = d.ask()
+    out = (chk.get_active(), e_name.get_text().strip(), e_code.get_text())
+    d.destroy()
+    if r != Gtk.ResponseType.OK:
+        return (None, name, code)
+    return out
+
+
 def ask_text(win, title, prompt, value=""):
     d = Dialog(win, title)
     d.body.pack_start(Gtk.Label(label=prompt, xalign=0), False, False, 0)
