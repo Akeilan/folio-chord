@@ -228,6 +228,10 @@ class Window(Gtk.ApplicationWindow):
         self.missing_log = []
         self.source = ("music", None)
         self.all_rows = []
+        self.shares = []            # the shared libraries found on the network (C4-01)
+        self.share_server = None    # this library, offered to the network
+        self._remotes = {}          # share index: the Remote already opened
+        self._shared_rows = {}      # sidebar key: (share index, its playlist id)
         self.rows = []
         self.cd_info = None
         self.cd_device = None
@@ -283,6 +287,11 @@ class Window(Gtk.ApplicationWindow):
             GLib.timeout_add(400, lambda: (self.rescan(), False)[1])
         GLib.timeout_add_seconds(3, self._check_cd)
         GLib.timeout_add_seconds(60, self._podcast_timer)
+        if self.settings.get("share"):
+            self.start_sharing()
+        if not os.environ.get("FOLIO_TEST_SCRIPT"):     # a test asks for the network itself
+            GLib.timeout_add(2000, lambda: (self.find_shares_later(), False)[1])
+            GLib.timeout_add_seconds(120, lambda: (self.find_shares_later(), True)[1])
         if not os.environ.get("FOLIO_CHORD_NO_AUTOSYNC"):
             GLib.timeout_add_seconds(8, lambda: (self.podview.refresh_due(), False)[1])
 
@@ -292,6 +301,7 @@ class Window(Gtk.ApplicationWindow):
 
     def _closing(self, *a):
         self.settings.save()
+        self.stop_sharing()
         return False
 
     # ================================================================ menus
@@ -312,7 +322,9 @@ class Window(Gtk.ApplicationWindow):
                 None,
                 ("sub", "Library", [("Import Playlist…", "import-playlist", None),
                                     ("Export Playlist…", "export-playlist", None), None,
-                                    ("Import iTunes Library…", "import-itunes", None)]),
+                                    ("Import iTunes Library…", "import-itunes", None), None,
+                                    ("Share My Library…", "share-settings", None),
+                                    ("Look for Shared Libraries", "shared-refresh", None)]),
                 ("sub", "Devices", [("Sync", "na:Sync", None), ("Back Up", "na:Back Up", None)]),
                 None,
                 ("Subscribe to Podcast…", "subscribe", None),
@@ -586,6 +598,17 @@ class Window(Gtk.ApplicationWindow):
         if self.cd_info is not None:
             s.append(None, ["", "DEVICES", "header", 0, "", True, False])
             s.append(None, ["cd", self.cd_info.get("album") or "Audio CD", "cd", 0, "", False, False])
+        self._shared_rows = {}
+        if self.shares:
+            s.append(None, ["", "SHARED", "header", 0, "", True, False])
+            for i, d in enumerate(self.shares):
+                it = s.append(None, ["shared", d.get("name") or d.get("host") or "Shared Library",
+                                     "shared", i, "", False, False])
+                for pl in d.get("playlists") or []:
+                    key = len(self._shared_rows) + 1
+                    self._shared_rows[key] = (i, pl["id"])
+                    s.append(it, [{"smart": "smart"}.get(pl["kind"], "playlist"), pl["name"],
+                                  "sharedpl", key, "", False, False])
         s.append(None, ["", "PLAYLISTS", "header", 0, "", True, False])
         pls = self.lib.playlists()
         nodes = {}
@@ -651,13 +674,146 @@ class Window(Gtk.ApplicationWindow):
             self.fill_cd()
         else:
             self.content.set_visible_child_name("songs")
-            self.search.set_placeholder_text("Search Music" if kind == "music" else "Search Playlist")
+            self.search.set_placeholder_text({"music": "Search Music", "shared": "Search Shared Library",
+                                              "sharedpl": "Search Playlist"}.get(kind, "Search Playlist"))
             self.load_songs()
         self.update_status()
 
     def current_playlist(self):
         kind, pid = self.source
         return self.lib.playlist(pid) if kind in ("playlist", "smart", "folder") else None
+
+    # ================================================================ Home Sharing (C4-01)
+    def start_sharing(self):
+        """Offer this library to the network."""
+        from . import sharing
+        self.stop_sharing()
+        try:
+            self.share_server = sharing.Share(self.lib, self.settings.get("share_name") or None,
+                                              self.settings.get("share_pass") or "")
+            self.share_server.start()
+        except OSError as e:
+            self.share_server = None
+            self.info("Your library couldn't be shared: %s" % e, "Home Sharing")
+            return None
+        return self.share_server.port
+
+    def stop_sharing(self):
+        if self.share_server is not None:
+            self.share_server.stop()
+            self.share_server = None
+
+    def find_shares(self, timeout=1.2, **kw):
+        """Look for shared libraries on the network and put them in the sidebar."""
+        from . import sharing
+        return self._shares_found(sharing.probe(timeout=timeout, **kw))
+
+    def find_shares_later(self):
+        """The same, off the main loop, so the window doesn't wait for the network."""
+        from . import net, sharing
+        net.in_thread(lambda: sharing.probe(), lambda found: self._shares_found(found))
+
+    def _shares_found(self, found):
+        mine = self.share_server.port if self.share_server else None
+        name = self.share_server.name if self.share_server else None
+        found = [d for d in found if not (mine and d.get("port") == mine and d.get("name") == name)]
+        if [(d.get("host"), d.get("port")) for d in found] != [(d.get("host"), d.get("port")) for d in self.shares]:
+            was = self.source
+            self.shares = found
+            self._remotes = {}
+            self.fill_sources()
+            if was[0] in ("shared", "sharedpl") and not self._select_src_row(*was):
+                self.select_source("music")     # the library being looked at stopped sharing
+        return found
+
+    def remote_for(self, i):
+        """The shared library at this place in the sidebar, opened (asking for its passcode once)."""
+        from . import dialogs, sharing
+        if i in self._remotes:
+            return self._remotes[i]
+        if not 0 <= i < len(self.shares):
+            return None
+        d = self.shares[i]
+        key = "%s:%s" % (d.get("host"), d.get("port"))
+        known = dict(self.settings.get("share_known") or {})
+        r = sharing.Remote(d["host"], d["port"], known.get(key, ""), d.get("name") or "")
+        if d.get("needs_pass") and not r.passcode:
+            got = dialogs.ask_text(self, "Home Sharing", "Passcode for “%s”:" % r.name)
+            if not got:
+                return None
+            r.passcode = got
+        try:
+            r.tracks()
+        except Exception as e:      # noqa: BLE001
+            import urllib.error
+            if isinstance(e, urllib.error.HTTPError) and e.code == 403:
+                known.pop(key, None)
+                self.settings.set("share_known", known)
+                self.info("That passcode wasn't right for “%s”." % r.name, "Home Sharing")
+            else:
+                self.info("“%s” couldn't be opened: %s" % (r.name, e), "Home Sharing")
+            return None
+        if r.passcode and known.get(key) != r.passcode:
+            known[key] = r.passcode
+            self.settings.set("share_known", known)
+        try:
+            d["playlists"] = r.playlists()
+        except Exception:           # noqa: BLE001
+            d["playlists"] = []
+        self._remotes[i] = r
+        self.fill_sources()
+        return r
+
+    def load_shared(self, kind, key):
+        """The songs of a shared library, or of one of its playlists."""
+        i, pid = self._shared_rows.get(key, (None, None)) if kind == "sharedpl" else (key, None)
+        r = self.remote_for(i) if i is not None else None
+        if r is None:
+            self.all_rows = []
+            self.apply_search()
+            return None
+        try:
+            self.all_rows = r.playlist(pid) if pid is not None else (r.songs or r.tracks())
+        except Exception as e:      # noqa: BLE001
+            self.info("“%s” couldn't be read: %s" % (r.name, e), "Home Sharing")
+            self.all_rows = []
+        self.browser.set_rows(self.all_rows)
+        self.apply_search()
+        return self.all_rows
+
+    def act_shared_refresh(self):
+        """File > Library > Look for Shared Libraries."""
+        found = self.find_shares()
+        self.fill_sources()
+        if not found:
+            self.info("No shared libraries answered on this network. Another Folio Chord has to be "
+                      "running with “Share My Library” turned on.", "Home Sharing")
+        return len(found)
+
+    def act_share_settings(self, *_a):
+        """File > Library > Share My Library…"""
+        from . import dialogs
+        on, name, code = dialogs.sharing(self, bool(self.settings.get("share")),
+                                         self.settings.get("share_name") or "",
+                                         self.settings.get("share_pass") or "")
+        if on is None:
+            return None
+        self.settings.set("share_name", name)
+        self.settings.set("share_pass", code)
+        self.settings.set("share", on)
+        if on:
+            self.start_sharing()
+        else:
+            self.stop_sharing()
+        return on
+
+    def play_from_rows(self, ids, index=0):
+        """Play what the list is showing: a shared library streams, this library plays its files."""
+        if self.source[0] in ("shared", "sharedpl"):
+            by = {r["id"]: r for r in self.rows}
+            rows = [by[i] for i in ids if i in by]
+            return self.app.playback.play_shared(rows, index)
+        return self.app.playback.play_songs(ids, index)
 
     def _src_press(self, v, ev):
         hit = v.get_path_at_pos(int(ev.x), int(ev.y))
@@ -795,10 +951,10 @@ class Window(Gtk.ApplicationWindow):
         self.songs.connect("context", lambda w, ev: self.song_menu(ev))
         self.songs.connect("selection", lambda *_: self._selection_changed())
         self.albumlist = views.AlbumList(self)
-        self.albumlist.connect("play", lambda w, rows, i: self.app.playback.play_songs([r["id"] for r in rows], i))
+        self.albumlist.connect("play", lambda w, rows, i: self.play_from_rows([r["id"] for r in rows], i))
         self.albumlist.connect("context", lambda w, ev: self.song_menu(ev))
         self.grid = views.AlbumGrid(self)
-        self.grid.connect("play", lambda w, rows: self.app.playback.play_songs([r["id"] for r in rows], 0))
+        self.grid.connect("play", lambda w, rows: self.play_from_rows([r["id"] for r in rows], 0))
         self.grid.connect("context", lambda w, ev: self.song_menu(ev))
         self.songview.add_named(self.songs, "list")
         self.songview.add_named(self.albumlist, "albums")
@@ -806,7 +962,7 @@ class Window(Gtk.ApplicationWindow):
         # Cover Flow sits above the song list (C3-21)
         self.coverflow = views.CoverFlow(self)
         self.coverflow.connect("chosen", lambda w, rows: self.songs.select_ids([r["id"] for r in rows]))
-        self.coverflow.connect("play", lambda w, rows: self.app.playback.play_songs([r["id"] for r in rows], 0))
+        self.coverflow.connect("play", lambda w, rows: self.play_from_rows([r["id"] for r in rows], 0))
         self.coverflow.set_no_show_all(True)
         box.pack_start(self.coverflow, False, False, 0)
         # the lyrics beside the songs (C3-19)
@@ -837,6 +993,8 @@ class Window(Gtk.ApplicationWindow):
 
     def load_songs(self):
         kind, pid = self.source
+        if kind in ("shared", "sharedpl"):
+            return self.load_shared(kind, pid)
         if kind == "music":
             self.all_rows = self.lib.tracks()
         else:
@@ -927,7 +1085,7 @@ class Window(Gtk.ApplicationWindow):
     def play_from_list(self, index):
         ids = self.songs.ids_in_order()
         if ids:
-            self.app.playback.play_songs(ids, index)
+            self.play_from_rows(ids, index)
 
     def song_menu(self, ev):
         if not self.selected_ids():
@@ -1274,9 +1432,22 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     # ================================================================ commands
+    # these change this library or the files in it, so they are not offered for someone else's
+    NOT_SHARED = {
+        "add_file", "add_folder", "add_to", "add_up_next", "artwork_set", "burn", "check_selection",
+        "convert", "delete", "delete_playlist", "duplicates", "edit_smart", "export_playlist",
+        "get_artwork", "get_info", "get_track_names", "import_cd", "import_itunes", "import_opml",
+        "import_playlist", "new_folder", "new_playlist", "new_playlist_selection", "new_smart",
+        "organize", "play_next", "rate", "remove_duplicates", "rename_playlist", "rescan",
+        "show_in_files", "subscribe", "uncheck_selection", "undo_organize", "up_next",
+    }
+
     def run(self, cmd, *args):
         name, _, arg = cmd.partition(":")
         fn = getattr(self, "act_" + name.replace("-", "_"), None)
+        if self.source[0] in ("shared", "sharedpl") and name.replace("-", "_") in self.NOT_SHARED:
+            self.info("A shared library can be listened to, but not changed.", "Home Sharing")
+            return None
         if fn is None:
             self.missing_log.append(cmd)
             self.info(NOT_HERE % (arg or cmd))
@@ -1366,7 +1537,7 @@ class Window(Gtk.ApplicationWindow):
     def act_play_source(self):
         self.load_songs()
         if self.rows:
-            self.app.playback.play_songs([r["id"] for r in self.rows], 0)
+            self.play_from_rows([r["id"] for r in self.rows], 0)
 
     def act_add_file(self):
         from . import dialogs
@@ -1599,9 +1770,9 @@ class Window(Gtk.ApplicationWindow):
         if rows:
             ids = self.songs.ids_in_order() if self.songview.get_visible_child_name() == "list" else [r["id"] for r in rows]
             first = rows[0]["id"]
-            self.app.playback.play_songs(ids, ids.index(first) if first in ids else 0)
-        elif self.source[0] in ("music", "playlist", "smart", "folder") and self.rows:
-            self.app.playback.play_songs(self.songs.ids_in_order(), 0)
+            self.play_from_rows(ids, ids.index(first) if first in ids else 0)
+        elif self.source[0] in ("music", "playlist", "smart", "folder", "shared", "sharedpl") and self.rows:
+            self.play_from_rows(self.songs.ids_in_order(), 0)
         elif self.source[0] == "podcasts":
             self.podview.play_selected()
         elif self.source[0] == "radio":

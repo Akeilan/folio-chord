@@ -25,6 +25,7 @@ DEFAULTS = {
     "podcast_refresh": "hour", "podcast_new": "recent", "podcast_keep": "all",
     "podcast_directory": "apple", "podcastindex_key": "", "podcastindex_secret": "", "podcast_country": "",
     "radio_country": "", "burn_gap": 2, "burn_kind": "audio", "copy_to_media": False,
+    "share": False, "share_name": "", "share_pass": "", "share_known": {},
     "eq_custom": {}, "output": "", "resume": True, "look": "standard", "skin": "", "classic_double": False,
     "classic_eq": True, "classic_pl": True, "classic_ontop": False, "classic_vis": "spectrum", "eq_auto": True, "balance": 0.0, "classic_pos": {}, "classic_shade": False,
 }
@@ -79,6 +80,7 @@ class Playback:
             bool((self.lib.track(tid) or {"skip_shuffle": 0})["skip_shuffle"])
         self.listeners = []
         self.now = None                # the item playing: {"kind": "song"|"episode"|"station", ...}
+        self.shared = []               # the songs of a shared library being played from (C4-01)
         self.stream_title = ""
         self.started_at = 0.0
         self.engine.listen(self._engine)
@@ -130,6 +132,15 @@ class Playback:
                 "start": e["position"] if e["position"] and e["position"] > 5 else 0, "stop": 0,
                 "stream": not uri.startswith("file:"), "artwork": p["artwork"] if p else ""}
 
+    def shared_item(self, i):
+        """A song from another Chord's library: streamed over the network, not read from a file."""
+        t = (self.shared or [])[i] if 0 <= i < len(self.shared or []) else None
+        if t is None:
+            return None
+        return {"kind": "song", "id": t["id"], "uri": t["path"], "title": t["title"], "artist": t["artist"],
+                "album": t["album"], "duration": t["duration"], "rg": None, "start": 0, "stop": 0,
+                "volume_adjust": 0, "path": t["path"], "eq": "", "shared": True}
+
     def station_item(self, st):
         return {"kind": "station", "id": st["uuid"], "uri": st["url"], "title": st["name"], "artist": "",
                 "album": ", ".join(st.get("tags", [])[:3]), "duration": 0, "rg": None, "stream": True, "station": st}
@@ -145,6 +156,15 @@ class Playback:
         ids = [t for t in ids if chk.get(t, 1) or t == first]
         self.queue.start(ids, ids.index(first))
         self._start(self.song_item(first))
+
+    def play_shared(self, tracks, index=0):
+        """Play from a shared library: the songs showing, in the order they show."""
+        self.shared = list(tracks)
+        if not self.shared:
+            return
+        index = max(0, min(index, len(self.shared) - 1))
+        self.queue.start([("s", i) for i in range(len(self.shared))], index)
+        self._start(self.shared_item(index))
 
     def play_episodes(self, eids, index=0):
         self.queue.start([("e", e) for e in eids], index)
@@ -178,6 +198,8 @@ class Playback:
     def _item_for(self, key):
         if isinstance(key, tuple) and key[0] == "e":
             return self.episode_item(key[1])
+        if isinstance(key, tuple) and key[0] == "s":
+            return self.shared_item(key[1])
         return self.song_item(key)
 
     def _next_item(self):
@@ -311,7 +333,7 @@ class Playback:
             if getattr(self, "sleep_end_of_item", False):
                 self.sleep_end_of_item = False
                 GLib.idle_add(lambda: (self.stop(), self._emit("sleep", 0), False)[2])
-            if val.get("kind") == "song":
+            if val.get("kind") == "song" and not val.get("shared"):
                 self.lib.played(val["id"])
             elif val.get("kind") == "episode":
                 self.app.pods.mark_played([val["id"]])
