@@ -347,6 +347,7 @@ class Window(Gtk.ApplicationWindow):
                 ("Show Duplicate Items", "duplicates:name", None),
                 ("Show Exact Duplicate Items", "duplicates:exact", None),
                 ("Show All Items", "duplicates:off", None),
+                ("Remove Duplicate Items…", "remove-duplicates", None),
                 None,
                 ("Show/Hide Lyrics", "toggle-lyrics", "<Control>y"),
                 ("Show/Hide Column Browser", "toggle-browser", "<Control>b"),
@@ -1855,6 +1856,71 @@ class Window(Gtk.ApplicationWindow):
         for r in rows:
             groups.setdefault(key(r), []).append(r)
         return [r for r in rows if len(groups[key(r)]) > 1]
+
+    def duplicate_groups(self, how="name", rows=None):
+        """The duplicates in the whole library, grouped, the copy worth keeping first (C4-03)."""
+        rows = list(self.lib.tracks()) if rows is None else list(rows)
+        groups = {}
+        for r in rows:
+            k = ((r["title"] or "").strip().lower(), (r["artist"] or "").strip().lower())
+            if how == "exact":
+                k += ((r["album"] or "").strip().lower(), int(round((r["duration"] or 0) / 2.0)))
+            groups.setdefault(k, []).append(r)
+        # keep the copy with a rating, then the one played most, then the biggest file, then the oldest
+        def best(r):
+            return (-(r["rating"] or 0), -(r["play_count"] or 0), -(r["size"] or 0),
+                    r["date_added"] or 0, r["id"])
+        out = [sorted(g, key=best) for k, g in sorted(groups.items()) if len(g) > 1]
+        return out
+
+    def act_remove_duplicates(self, how=None):
+        """View > Remove Duplicate Items (C4-03): keeps one copy of each song, deletes the rest."""
+        from . import dialogs
+        by_name = self.duplicate_groups("name")
+        by_exact = self.duplicate_groups("exact")
+        def extra(gs):
+            return [r for g in gs for r in g[1:]]
+        if how is None:
+            if not extra(by_name):
+                self.info("No duplicate songs to remove.")
+                return 0
+            how = dialogs.choose(
+                self, "Remove duplicate songs?",
+                "Same name and artist: %d extra file%s.\nExact duplicates (same album and length too): %d."
+                % (len(extra(by_name)), "" if len(extra(by_name)) == 1 else "s", len(extra(by_exact))),
+                [("Cancel", None), ("Exact Duplicates", "exact"), ("Same Name and Artist", "name")])
+            if how is None:
+                return None
+        groups = by_exact if how == "exact" else by_name
+        gone = extra(groups)
+        if not gone:
+            self.info("No %sduplicate songs to remove." % ("exact " if how == "exact" else ""))
+            return 0
+        names = "\n".join("%s — %s" % (r["title"] or os.path.basename(r["path"]), r["artist"] or "")
+                          for r in gone[:20])
+        if not dialogs.confirm(
+                self, "Delete %d duplicate file%s?" % (len(gone), "" if len(gone) == 1 else "s"),
+                "One copy of each of these %d songs is kept: the one with a rating, else the one played "
+                "most, else the largest file. The other files are deleted from the computer rather than "
+                "moved to the Trash, so this can't be undone.\n\n%s%s"
+                % (len(groups), names, "\n…" if len(gone) > 20 else ""), ok="Delete Files"):
+            return None
+        done, failed = [], []
+        for r in gone:
+            try:
+                os.remove(r["path"])
+            except OSError as e:
+                if os.path.exists(r["path"]):
+                    failed.append("%s (%s)" % (r["path"], e.strerror or e))
+                    continue
+            done.append(r["id"])
+        if done:
+            self.lib.remove(done)
+            self.load_songs()
+        if failed:
+            self.info("%d file%s deleted. %d couldn't be:\n%s"
+                      % (len(done), "" if len(done) == 1 else "s", len(failed), "\n".join(failed[:20])))
+        return len(done)
 
     def act_toggle_lyrics(self):
         on = not self.lyrics_box.get_visible()

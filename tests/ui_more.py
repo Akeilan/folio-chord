@@ -179,6 +179,35 @@ def main():
     n = w.run("duplicates:off")
     check(n > 2, "Show All Items")
 
+    # ---- C4-03 removing duplicates deletes the extra files
+    for name in ("copy2", "copy3"):
+        shutil.copy(lib.track(bt)["path"], os.path.join(dup_dir, name + os.path.splitext(path)[1]))
+    w.add_paths([dup_dir])
+    pump(0.3)
+    groups = [g for g in w.duplicate_groups("name") if (g[0]["title"] or "") == "Blue Train"]
+    check(len(groups) == 1 and len(groups[0]) == 4, "the four copies group together",
+          [len(g) for g in groups])
+    kept_path = groups[0][0]["path"]
+    copies = [r["path"] for r in groups[0][1:]]
+    answer("Choose", Gtk.ResponseType.CANCEL)
+    check(w.run("remove-duplicates") is None, "Remove Duplicate Items can be cancelled")
+    check(all(os.path.exists(c) for c in copies), "and nothing is deleted when it is")
+    answer("Choose", lambda d: 3)                   # Same Name and Artist
+    answer("Confirm", Gtk.ResponseType.CANCEL)
+    check(w.run("remove-duplicates") is None, "the delete warning can be cancelled too")
+    check(all(os.path.exists(c) for c in copies), "and still nothing is deleted")
+    answer("Confirm", Gtk.ResponseType.OK)
+    n = w.run("remove-duplicates")
+    pump(0.3)
+    check(n == 3, "Remove Duplicate Items deletes the extra files", n)
+    check(not any(os.path.exists(c) for c in copies) and os.path.exists(kept_path),
+          "the extra files are gone and the copy worth keeping is still there")
+    left = [g for g in w.duplicate_groups("name") if (g[0]["title"] or "") == "Blue Train"]
+    check(not left and len([r for r in lib.tracks() if r["title"] == "Blue Train"]) == 1,
+          "no copies are left and the library holds one of it")
+    dialogs.RESPONSE.pop("Choose", None)
+    dialogs.RESPONSE.pop("Confirm", None)
+
     # ---- C3-21 Cover Flow
     w.run("view:coverflow")
     pump(0.4)

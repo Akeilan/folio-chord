@@ -19,7 +19,7 @@ class Dialog(Gtk.Dialog):
         self.get_style_context().add_class("chord-dialog")
         for label, resp in buttons:
             b = self.add_button(label, resp)
-            if resp == Gtk.ResponseType.OK or label in ("Delete", "Unsubscribe", "Import", "Burn", "Subscribe", "Move to Trash"):
+            if resp == Gtk.ResponseType.OK or label in ("Delete", "Delete Files", "Unsubscribe", "Import", "Burn", "Subscribe", "Move to Trash"):
                 b.get_style_context().add_class("chord-default")
         if buttons:
             self.set_default_response(buttons[-1][1])
