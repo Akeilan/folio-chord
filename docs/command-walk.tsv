@@ -40,6 +40,7 @@ as Cover Flow	view:coverflow	ok
 Show Duplicate Items	duplicates:name	ok
 Show Exact Duplicate Items	duplicates:exact	ok
 Show All Items	duplicates:off	ok
+Remove Duplicate Items…	remove-duplicates	ok
 Show/Hide Lyrics	toggle-lyrics	ok
 Show/Hide Column Browser	toggle-browser	ok
 Show/Hide Artwork	toggle-artwork	ok
