@@ -2236,6 +2236,63 @@ class Window(Gtk.ApplicationWindow):
             self.info("%d songs went back. These couldn't:\n%s" % (len(moved), "\n".join(errors[:30])))
         return moved
 
+    def act_speakers(self, relative=None):
+        """Play to network speakers (C4-02): this computer, or a UPnP renderer on the network."""
+        from . import cast
+        pop = Gtk.Popover.new(relative or self.b_output)
+        pop.get_style_context().add_class("chord-pop")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_border_width(6)
+        t = Gtk.Label(xalign=0)
+        t.set_markup("<b>Play to</b>")
+        box.pack_start(t, False, False, 2)
+        waiting = Gtk.Label(label="Looking for speakers...", xalign=0)
+        box.pack_start(waiting, False, False, 2)
+        pop.add(box)
+        box.show_all()
+        pop.popup()
+        self.speaker_popover = pop
+        eng = self.app.playback.engine
+        here = eng.speaker
+
+        def fill(found):
+            waiting.destroy()
+            group = None
+            b = Gtk.RadioButton.new_with_label_from_widget(None, "This computer")
+            group = b
+            b.set_active(here is None)
+            b.connect("toggled", lambda w: w.get_active() and self.choose_speaker(None))
+            box.pack_start(b, False, False, 0)
+            for info in found:
+                r = Gtk.RadioButton.new_with_label_from_widget(group, info["name"])
+                r.set_active(bool(here) and here.info.get("udn") == info.get("udn"))
+                r.connect("toggled", lambda w, i=info: w.get_active() and self.choose_speaker(i))
+                box.pack_start(r, False, False, 0)
+            if not found:
+                box.pack_start(Gtk.Label(label="No speakers answered.", xalign=0), False, False, 2)
+            box.show_all()
+            return False
+
+        def look():
+            found = cast.speakers(2.0)
+            GLib.idle_add(fill, found)
+
+        import threading
+        threading.Thread(target=look, daemon=True).start()
+        return True
+
+    def choose_speaker(self, info):
+        """Send the sound to a speaker, or bring it back to this computer."""
+        from . import cast
+        eng = self.app.playback.engine
+        if info is None:
+            eng.play_to(None)
+            self.settings.set("speaker", "")
+            return
+        sp = cast.Speaker(info)
+        eng.play_to(sp)
+        self.settings.set("speaker", info.get("name", ""))
+
     def act_outputs(self, relative=None):
         """The sound outputs (C3-24): the desktop's choice, or a particular one."""
         from . import player
@@ -2257,6 +2314,12 @@ class Window(Gtk.ApplicationWindow):
             b.connect("toggled", lambda w, n=name, d=dev: w.get_active() and self.choose_output(n if d else "", d))
             self.output_buttons[name] = b
             box.pack_start(b, False, False, 0)
+        sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        box.pack_start(sep, False, False, 4)
+        nb = Gtk.Button.new_with_label("Play to a network speaker...")
+        nb.set_relief(Gtk.ReliefStyle.NONE)
+        nb.connect("clicked", lambda _w: (pop.popdown(), self.run("speakers")))
+        box.pack_start(nb, False, False, 0)
         pop.add(box)
         box.show_all()
         pop.popup()

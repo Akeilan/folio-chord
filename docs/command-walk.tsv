@@ -9,6 +9,8 @@ Check Music Folders Again	rescan	ok
 Import Playlist…	import-playlist	ok
 Export Playlist…	export-playlist	ok
 Import iTunes Library…	import-itunes	ok
+Share My Library…	share-settings	ok
+Look for Shared Libraries	shared-refresh	No shared libraries answered on this network. Another Folio Chord has to be running with “Share My Library” turned on.
 Sync	na:Sync	“Sync” isn't available in Folio Chord.
 Back Up	na:Back Up	“Back Up” isn't available in Folio Chord.
 Subscribe to Podcast…	subscribe	ok
