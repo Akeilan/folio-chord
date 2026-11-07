@@ -19,6 +19,9 @@ internet radio and podcasts. Part of Folio Studio.
 - **Home Sharing**: share your library with the other Folio Chords on your own network, under a
   name and an optional passcode, and play from theirs — their playlists included. No account, and
   nothing leaves your network. A shared library can be listened to, not changed.
+- **Network speakers**: play to a UPnP/DLNA speaker or receiver on your own network. The speakers
+  that answer are listed under the volume control; the song is served from this computer and the
+  play, pause, seek and volume controls drive the speaker. "This computer" brings the sound back.
 - **CDs**: import as AAC, Apple Lossless, MP3, FLAC or WAV with track names from MusicBrainz; burn
   a playlist to an audio or data CD (wodim). Album covers from the Cover Art Archive.
 
@@ -30,6 +33,7 @@ sent anywhere except the requests to the directories above when you use them.
     cd app && python3 -m folio_chord
     python3 tests/test_engine.py; python3 tests/test_net.py        # engine, radio and podcasts
     python3 tests/test_sharing.py                                  # Home Sharing
+    python3 tests/test_cast.py                                     # network speakers
     sh tests/run_ui.sh ui_library.py                               # UI tests, on an X display
     sh tests/theme_run.sh                                          # desktop themes (X2-01)
     sh build-deb.sh out/                                           # the package

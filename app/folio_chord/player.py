@@ -186,6 +186,10 @@ class Engine:
         self.state = "stopped"
         self.spectrum_on = False
         self._fading = None
+        self.speaker = None         # a network speaker the sound goes to instead (C4-02)
+        self.cast_pos = 0.0
+        self.cast_dur = 0.0
+        self._cast_tick_id = None
         GLib.timeout_add(100, self._tick)
 
     # ---------------------------------------------------------------- output (C3-24)
@@ -342,6 +346,8 @@ class Engine:
     def play(self, item, next_fn=None):
         if next_fn is not None:
             self.next_fn = next_fn
+        if self.speaker is not None:
+            return self._cast_play(item)
         self._cancel_fade()
         for p in (self.a, self.b):
             p.pb.set_state(Gst.State.NULL)
@@ -370,13 +376,97 @@ class Engine:
             GLib.idle_add(lambda: (pipe.pb.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
                                                        int(st * Gst.SECOND)), False)[1])
 
+    # ----------------------------------------------------------- network speakers (C4-02)
+    def play_to(self, speaker):
+        """Send the sound to a network speaker, or with None back to this computer."""
+        was = self.item
+        pos = self.position() if self.state != "stopped" else 0.0
+        playing = self.state == "playing"
+        if self.speaker is not None:
+            try:
+                self.speaker.close()
+            except Exception:                    # noqa: BLE001
+                pass
+        else:
+            for p in (self.a, self.b):
+                p.pb.set_state(Gst.State.NULL)
+        self.speaker = speaker
+        if self._cast_tick_id:
+            GLib.source_remove(self._cast_tick_id)
+            self._cast_tick_id = None
+        if speaker is not None:
+            speaker.set_volume(self.volume * 100.0)
+            self._cast_tick_id = GLib.timeout_add_seconds(1, self._cast_tick)
+        self.state = "stopped"
+        if was and playing:
+            item = dict(was)
+            item["start"] = pos
+            item.pop("_paused", None)
+            self.play(item)
+        else:
+            self._emit("state", "stopped")
+
+    def _cast_play(self, item):
+        """Hand a song to the speaker and keep it in step with the window."""
+        path = item.get("path") or ""
+        if item.get("stream") or not path:
+            self._emit("error", "A station or a stream can't be sent to a network speaker yet.")
+            return
+        self.cur.set_item(item)
+        self.cast_pos = float(item.get("start") or 0)
+        self.cast_dur = float(item.get("duration") or 0)
+        ok = self.speaker.play_file(path, item.get("title", ""), item.get("artist", ""), item.get("album", ""))
+        if not ok:
+            self.state = "stopped"
+            self._emit("error", "%s didn't take the song." % self.speaker.name)
+            self._emit("state", "stopped")
+            return
+        if self.cast_pos > 1.0:
+            self.speaker.seek(self.cast_pos)
+        self.state = "playing"
+        self._emit("track", item)
+        self._emit("state", "playing")
+
+    def _cast_tick(self):
+        """Once a second: where the speaker is, and whether the song has ended."""
+        if self.speaker is None:
+            self._cast_tick_id = None
+            return False
+        if self.state in ("playing", "paused"):
+            at = self.speaker.position()
+            if at:
+                self.cast_pos, dur = at[0], at[1]
+                if dur:
+                    self.cast_dur = dur
+            if self.state == "playing" and self.speaker.state() == "STOPPED" and self.cast_pos > 0.5:
+                # the song finished on the speaker: the next one follows
+                self.cast_pos = 0.0
+                nxt = self.next_fn() if self.next_fn else None
+                if nxt:
+                    self._cast_play(nxt)
+                else:
+                    self.state = "stopped"
+                    self._emit("state", "stopped")
+                    self._emit("eos", None)
+        return True
+
     def pause(self):
+        if self.speaker is not None:
+            if self.state == "playing" and self.speaker.pause():
+                self.state = "paused"
+                self._emit("state", "paused")
+            return
         if self.state == "playing":
             self.cur.pb.set_state(Gst.State.PAUSED)
             self.state = "paused"
             self._emit("state", "paused")
 
     def resume(self):
+        if self.speaker is not None:
+            if self.state == "paused" and self.speaker.resume():
+                self.state = "playing"
+                self._emit("state", "playing")
+            return
         if self.state in ("paused",):
             self.cur.pb.set_state(Gst.State.PLAYING)
             self.state = "playing"
@@ -389,6 +479,12 @@ class Engine:
             self.resume()
 
     def stop(self):
+        if self.speaker is not None:
+            self.speaker.stop()
+            self.state = "stopped"
+            self.cast_pos = 0.0
+            self._emit("state", "stopped")
+            return
         self._cancel_fade()
         for p in (self.a, self.b):
             p.pb.set_state(Gst.State.NULL)
@@ -401,16 +497,24 @@ class Engine:
         return self.cur.item if self.state != "stopped" else None
 
     def position(self):
+        if self.speaker is not None:
+            return self.cast_pos
         ok, pos = self.cur.pb.query_position(Gst.Format.TIME)
         return pos / Gst.SECOND if ok and pos >= 0 else 0.0
 
     def duration(self):
+        if self.speaker is not None:
+            return self.cast_dur or float((self.cur.item or {}).get("duration") or 0)
         ok, d = self.cur.pb.query_duration(Gst.Format.TIME)
         if ok and d > 0:
             return d / Gst.SECOND
         return float((self.cur.item or {}).get("duration") or 0)
 
     def seek(self, secs):
+        if self.speaker is not None:
+            if self.speaker.seek(max(0.0, secs)):
+                self.cast_pos = max(0.0, secs)
+            return
         t = int(max(0, secs) * Gst.SECOND)
         if self.rate != 1.0:        # keep the speed (a plain seek would set it back to 1x)
             self.cur.pb.seek(self.rate, Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
@@ -420,6 +524,9 @@ class Engine:
 
     def set_volume(self, v):
         self.volume = max(0.0, min(1.0, v))
+        if self.speaker is not None:
+            self.speaker.set_volume(self.volume * 100.0)
+            return
         for p in (self.a, self.b):
             self._apply_volume(p)
 
@@ -496,6 +603,8 @@ class Engine:
 
     # ---------------------------------------------------------------- crossfade and stop times
     def _tick(self):
+        if self.speaker is not None:
+            return True
         p = self.cur
         it = p.item
         if self.state == "playing" and it and not it.get("stream"):
