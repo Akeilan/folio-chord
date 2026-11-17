@@ -1,6 +1,6 @@
 """Song information in the files themselves (C3-01, C3-04): read and write the tags and artwork
-of MP3, MP2, MP4/M4A (AAC, ALAC), raw AAC, FLAC, Ogg Vorbis, Opus, WAV, AIFF, WMA, Monkey's Audio
-and WavPack files through mutagen; Matroska audio (.mka) is read through GStreamer and written with
+of MP3, MP2, MP4/M4A (AAC, ALAC), raw AAC, FLAC, Ogg Vorbis, Opus, WAV, AIFF, WMA and
+WavPack files through mutagen; Matroska audio (.mka) is read through GStreamer and written with
 mkvpropedit (mkvtoolnix) when it is installed (C8-41).
 
   read(path)              {"title", "artist", "album_artist", "album", "genre", "composer", "year",
@@ -19,7 +19,7 @@ import re
 FIELDS = ("title", "artist", "album_artist", "album", "genre", "composer", "year", "track_no",
           "track_count", "disc_no", "disc_count", "comments", "compilation", "bpm", "grouping")
 EXTENSIONS = (".mp3", ".mp2", ".m4a", ".m4b", ".mp4", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wav", ".aif", ".aiff",
-              ".wma", ".ape", ".wv", ".mka")
+              ".wma", ".wv", ".mka")
 
 # Vorbis comment names (FLAC, Ogg, Opus)
 _VC = {"title": "TITLE", "artist": "ARTIST", "album_artist": "ALBUMARTIST", "album": "ALBUM",
@@ -33,7 +33,7 @@ _MP4 = {"title": "\xa9nam", "artist": "\xa9ART", "album_artist": "aART", "album"
 _ASF = {"title": "Title", "artist": "Author", "album_artist": "WM/AlbumArtist", "album": "WM/AlbumTitle",
         "genre": "WM/Genre", "composer": "WM/Composer", "year": "WM/Year", "comments": "Description",
         "grouping": "WM/ContentGroupDescription", "bpm": "WM/BeatsPerMinute"}
-# APEv2 items (Monkey's Audio, WavPack)
+# APEv2 items (WavPack)
 _APE = {"title": "Title", "artist": "Artist", "album_artist": "Album Artist", "album": "Album", "genre": "Genre",
         "composer": "Composer", "year": "Year", "comments": "Comment", "grouping": "Grouping", "bpm": "BPM",
         "compilation": "Compilation"}
@@ -276,8 +276,6 @@ def _kind(f, path):
         return "AIFF audio file"
     if n == "ASF":
         return "Windows Media audio file"
-    if n == "MonkeysAudio":
-        return "Monkey's Audio file"
     if n == "WavPack":
         return "WavPack audio file"
     if n == "OggFLAC":
@@ -332,7 +330,7 @@ def read(path):
         out["rg_track"] = _gain(a("replaygain_track_gain")) if t.get("replaygain_track_gain") else None
         out["rg_album"] = _gain(a("replaygain_album_gain")) if t.get("replaygain_album_gain") else None
         out["has_art"] = bool(t.get("WM/Picture"))
-    elif n in ("MonkeysAudio", "WavPack") or type(t).__name__ == "APEv2":
+    elif n in ("WavPack",) or type(t).__name__ == "APEv2":
         def a(key):
             for kk in t.keys():
                 if kk.lower() == key.lower():
@@ -479,7 +477,7 @@ def write(path, changes):
             t["WM/IsCompilation"] = [ASFBoolAttribute(bool(changes["compilation"]))]
         f.save()
         return
-    if n in ("MonkeysAudio", "WavPack"):
+    if n in ("WavPack",):
         for k, key in _APE.items():
             if k in changes:
                 for kk in [x for x in t.keys() if x.lower() == key.lower()]:
@@ -706,7 +704,7 @@ def artwork(path):
     if n == "ASF":
         v = t.get("WM/Picture")
         return _asf_unpicture(bytes(v[0].value)) if v else None
-    if n in ("MonkeysAudio", "WavPack"):
+    if n in ("WavPack",):
         for kk in t.keys():
             if kk.lower().startswith("cover art"):
                 blob = bytes(t[kk].value)
@@ -782,7 +780,7 @@ def set_artwork(path, data, mime="image/jpeg"):
             t["WM/Picture"] = [ASFByteArrayAttribute(_asf_picture(data, mime))]
         f.save()
         return
-    if n in ("MonkeysAudio", "WavPack"):
+    if n in ("WavPack",):
         from mutagen.apev2 import APEValue, BINARY
         for kk in [x for x in t.keys() if x.lower().startswith("cover art")]:
             del t[kk]
@@ -840,7 +838,7 @@ def lyrics(path):
     if type(f).__name__ == "ASF":
         v = t.get("WM/Lyrics")
         return str(v[0]) if v else ""
-    if type(f).__name__ in ("MonkeysAudio", "WavPack"):
+    if type(f).__name__ in ("WavPack",):
         for kk in t.keys():
             if kk.lower() == "lyrics":
                 return str(t[kk])
@@ -879,7 +877,7 @@ def set_lyrics(path, text):
             t["WM/Lyrics"] = [text]
         f.save()
         return
-    if n in ("MonkeysAudio", "WavPack"):
+    if n in ("WavPack",):
         for kk in [x for x in t.keys() if x.lower() == "lyrics"]:
             del t[kk]
         if text:

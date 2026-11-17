@@ -4,7 +4,7 @@ A music player in the manner of the classic iTunes, for Zorin OS and Ubuntu: you
 internet radio and podcasts. Part of Folio Studio.
 
 - **Library**: watches your music folders (MP3, AAC/M4A, Apple Lossless, FLAC, Ogg Vorbis, Opus,
-  WAV, AIFF, WMA, Monkey's Audio, WavPack, MP2 and Matroska audio), following songs that are renamed
+  WAV, AIFF, WMA, WavPack, MP2 and Matroska audio), following songs that are renamed
   or moved and linked folders. The column browser (Genres, Artists, Albums), list, album list and grid views, search,
   ratings, play counts, Get Info (tags and artwork written into the files).
 - **Playlists**: playlists and folders, Smart Playlists with rules, limits and live updating
@@ -29,13 +29,18 @@ internet radio and podcasts. Part of Folio Studio.
 The Store, sign-in, Match and device sync aren't part of it; their menu items say so. Nothing is
 sent anywhere except the requests to the directories above when you use them.
 
+## What's new in 0.3.1
+
+- Folio Chord is now under the MIT License, like the rest of Folio Studio.
+- Monkey's Audio is left out.
+
 ## What's new in 0.3
 
 - Menus can be read again when opened from the menu bar.
 - Songs renamed or moved in Files keep their ratings, plays and playlists; a damaged library file
   is replaced by the copy kept each time Chord starts.
 - Big libraries: ratings and plays redraw one row, and 40,000 songs show in about a second and a half.
-- WMA, Monkey's Audio, WavPack, MP2 and Matroska audio. Changing Matroska details needs mkvtoolnix.
+- WMA, WavPack, MP2 and Matroska audio. Changing Matroska details needs mkvtoolnix.
 - Up Next songs can be reordered and taken out.
 - Remove Duplicate Items moves files to the Trash and offers exact duplicates first.
 - Files, folders and playlists can be dragged in from Files; stations that drop out are tried
