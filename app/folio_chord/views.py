@@ -32,7 +32,15 @@ def fmt_time(secs):
 
 
 def fmt_date(t):
-    return time.strftime("%d-%m-%Y %H:%M", time.localtime(t)) if t else ""
+    """A date and time the way this computer's language and region write them (C8-40)."""
+    if not t:
+        return ""
+    import re
+    try:
+        txt = GLib.DateTime.new_from_unix_local(int(t)).format("%x %X") or ""
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    return re.sub(r"(\d{1,2}[:.]\d{2})[:.]\d{2}", r"\1", txt)      # no seconds
 
 
 def stars(rating):
@@ -72,6 +80,8 @@ class SongList(Gtk.ScrolledWindow):
         self.view.enable_model_drag_dest(t, Gdk.DragAction.MOVE)
         self.view.connect("drag-data-get", self._drag_get)
         self.view.connect("drag-data-received", self._drag_received)
+        self.view.connect("drag-motion", self._drag_motion)
+        self.view.connect("drag-drop", self._drag_drop)
 
     # ---------------------------------------------------------------- columns
     def set_columns(self, keys):
@@ -84,6 +94,7 @@ class SongList(Gtk.ScrolledWindow):
         playing.set_cell_data_func(pr, self._playing_cell)
         playing.set_fixed_width(20)
         playing.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        self.view.set_fixed_height_mode(False)
         self.view.append_column(playing)
         for k in keys:
             if k not in COL:
@@ -114,7 +125,11 @@ class SongList(Gtk.ScrolledWindow):
         last.pack_start(rr, True)
         last.set_cell_data_func(rr, self._stripe)
         last.set_expand(True)
+        last.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        last.set_fixed_width(10)
         self.view.append_column(last)
+        # every row is one line: the list only measures the rows it shows, not all of them (C8-10)
+        self.view.set_fixed_height_mode(True)
 
     def _stripe(self, col, cell, model, it, data=None):
         path = model.get_path(it)
@@ -148,8 +163,10 @@ class SongList(Gtk.ScrolledWindow):
         self.store = Gtk.ListStore(*TYPES)
         playing = self.win.app.playback.now
         pid = playing["id"] if playing and playing.get("kind") == "song" else None
+        cols = list(range(len(TYPES)))
+        add = self.store.insert_with_valuesv
         for i, r in enumerate(self.rows):
-            self.store.append(self._row(r, i, pid))
+            add(-1, cols, self._row(r, i, pid))
         self.view.set_model(self.store)
         self.view.set_reorderable(False)
         if sort and sort[0] is not None and sort[0] >= 0:
@@ -158,13 +175,17 @@ class SongList(Gtk.ScrolledWindow):
             self.store.set_sort_column_id(26, Gtk.SortType.ASCENDING)
 
     def _row(self, r, i, playing_id):
-        return [r["id"], bool(r["checked"]), str(r["track_no"] or "") if self.playlist is None else str(i + 1),
-                r["title"] or "", fmt_time(r["duration"]), r["artist"] or "", r["album"] or "", r["genre"] or "",
-                stars(r["rating"]), str(r["play_count"] or "") if r["play_count"] else "", str(r["year"] or "") if r["year"] else "",
-                float(r["duration"] or 0), int(r["rating"] or 0), int(r["play_count"] or 0), int(r["year"] or 0),
-                r["album_artist"] or "", r["composer"] or "", r["kind"] or "", "%d kbps" % r["bitrate"] if r["bitrate"] else "",
-                int(r["track_no"] or 0), int(r["bitrate"] or 0), fmt_date(r["date_added"]), float(r["date_added"] or 0),
-                fmt_date(r["last_played"]), float(r["last_played"] or 0), r["comments"] or "", i, r["id"] == playing_id]
+        dur, rating, plays, year, tn, br = r["duration"], r["rating"], r["play_count"], r["year"], r["track_no"], r["bitrate"]
+        added, last = r["date_added"], r["last_played"]
+        # the dates are formatted only when their columns are showing (they are the slow part)
+        show = self.columns
+        return [r["id"], bool(r["checked"]), (str(tn) if tn else "") if self.playlist is None else str(i + 1),
+                r["title"] or "", fmt_time(dur), r["artist"] or "", r["album"] or "", r["genre"] or "",
+                stars(rating), str(plays) if plays else "", str(year) if year else "",
+                float(dur or 0), int(rating or 0), int(plays or 0), int(year or 0),
+                r["album_artist"] or "", r["composer"] or "", r["kind"] or "", "%d kbps" % br if br else "",
+                int(tn or 0), int(br or 0), fmt_date(added) if "date_added" in show else "", float(added or 0),
+                fmt_date(last) if "last_played" in show else "", float(last or 0), r["comments"] or "", i, r["id"] == playing_id]
 
     def refresh_row(self, tid):
         new = self.lib.track(tid)
@@ -172,7 +193,10 @@ class SongList(Gtk.ScrolledWindow):
             return
         for i, r in enumerate(self.rows):
             if r["id"] == tid:
-                self.rows[i] = new
+                d = dict(new)
+                if "pl_pos" in r.keys():
+                    d["pl_pos"] = r["pl_pos"]
+                self.rows[i] = d
         playing = self.win.app.playback.now
         pid = playing["id"] if playing and playing.get("kind") == "song" else None
         for row in self.store:
@@ -197,8 +221,13 @@ class SongList(Gtk.ScrolledWindow):
         return [model[p][0] for p in paths]
 
     def selected_positions(self):
+        """The selected songs' places in the playlist shown (missing songs counted, C8-03)."""
         model, paths = self.view.get_selection().get_selected_rows()
-        return [model[p][26] for p in paths]
+        return [self._pos(model[p][26]) for p in paths]
+
+    def _pos(self, i):
+        r = self.rows[i]
+        return r["pl_pos"] if "pl_pos" in r.keys() else i
 
     def select_ids(self, ids, scroll=True):
         sel = self.view.get_selection()
@@ -228,6 +257,15 @@ class SongList(Gtk.ScrolledWindow):
                     sel.select_path(hit[0])
             self.emit("context", ev)
             return True
+        if ev.button == 1 and hit and ev.type == Gdk.EventType.BUTTON_PRESS and \
+                not ev.state & (Gdk.ModifierType.SHIFT_MASK | Gdk.ModifierType.CONTROL_MASK) and \
+                not view.get_selection().path_is_selected(hit[0]) and getattr(hit[1], "key", "") not in ("rating", "checked"):
+            # a press on a song not selected selects it first, so dragging it carries it
+            # (rather than starting a rubber band over other songs, C8-15)
+            view.get_selection().unselect_all()
+            view.get_selection().select_path(hit[0])
+            view.set_cursor(hit[0], None, False)
+            return False
         if ev.button == 1 and hit and getattr(hit[1], "key", "") == "rating":
             x = hit[2]
             n = max(0, min(5, int((x - 4) / 12.0 + 1)))
@@ -255,15 +293,55 @@ class SongList(Gtk.ScrolledWindow):
         ids = self.selected_ids()
         data.set(Gdk.Atom.intern("application/x-chord-tracks", False), 8, (",".join(map(str, ids))).encode())
 
+    URIS = Gdk.Atom.intern("text/uri-list", False)
+    TRACKS = Gdk.Atom.intern("application/x-chord-tracks", False)
+
+    def _drag_motion(self, view, ctx, x, y, t):
+        """Songs dragged within a playlist reorder it (the tree view's own handling only takes rows
+        of its own model)."""
+        targets = ctx.list_targets()
+        files = False
+        if self.TRACKS not in targets:
+            # files from another program: left to the window, which takes them (C8-26)
+            view.stop_emission_by_name("drag-motion")
+            return False
+        if self.playlist is None:
+            Gdk.drag_status(ctx, 0, t)
+            return True
+        dest = view.get_dest_row_at_pos(x, y)
+        if dest:
+            view.set_drag_dest_row(dest[0], Gtk.TreeViewDropPosition.BEFORE if dest[1] in (
+                Gtk.TreeViewDropPosition.BEFORE, Gtk.TreeViewDropPosition.INTO_OR_BEFORE) else Gtk.TreeViewDropPosition.AFTER)
+        else:
+            view.unset_rows_drag_dest()
+        Gdk.drag_status(ctx, Gdk.DragAction.COPY if files else Gdk.DragAction.MOVE, t)
+        return True
+
+    def _drag_drop(self, view, ctx, x, y, t):
+        targets = ctx.list_targets()
+        target = self.TRACKS if self.TRACKS in targets else None
+        if target is None:
+            return False
+        view.drag_get_data(ctx, target, t)
+        return True
+
     def _drag_received(self, view, ctx, x, y, data, info, t):
+        view.stop_emission_by_name("drag-data-received")
+        info = 1
+        dest = view.get_dest_row_at_pos(x, y)
+        after = dest is not None and dest[1] in (Gtk.TreeViewDropPosition.AFTER, Gtk.TreeViewDropPosition.INTO_OR_AFTER)
+        end = max([self._pos(i) for i in range(len(self.rows))] or [-1]) + 1
+        at = (self._pos(self.store[dest[0]][26]) + (1 if after else 0)) if dest else end
+        if info == 2:
+            from .window import paths_of
+            ids = self.win.add_paths(paths_of(data))
+            if ids and self.playlist is not None:
+                self.lib.add_to_playlist(self.playlist, ids, at)
+            ctx.finish(True, False, t)
+            return
         if self.playlist is None:
             ctx.finish(False, False, t)
             return
-        dest = view.get_dest_row_at_pos(x, y)
-        at = len(self.rows)
-        if dest:
-            path, pos = dest
-            at = self.store[path][26] + (1 if pos in (Gtk.TreeViewDropPosition.AFTER, Gtk.TreeViewDropPosition.INTO_OR_AFTER) else 0)
         self.reorder(self.selected_positions(), at)
         ctx.finish(True, False, t)
 
@@ -386,17 +464,32 @@ class AlbumGrid(Gtk.ScrolledWindow):
             k = ((r["album_artist"] or r["artist"] or "").lower(), (r["album"] or "").lower())
             groups.setdefault(k, []).append(r)
         self.albums = [groups[k] for k in sorted(groups, key=lambda k: (k[1], k[0]))]
+        self.view.set_model(None)       # filled detached; covers come in afterwards (C8-10)
         self.store.clear()
         ph = art.placeholder(128, self.win.dark)
         for g in self.albums:
             r = g[0]
             a = GLib.markup_escape_text(r["album"] or "Unknown Album")
             b = GLib.markup_escape_text(r["album_artist"] or r["artist"] or "Unknown Artist")
-            self.store.append([art.for_song(r["path"], 128) if r["has_art"] else (art.for_song(r["path"], 128) or ph),
-                               "<b>%s</b>\n<small>%s</small>" % (a, b), g])
-        for row in self.store:
-            if row[0] is None:
-                row[0] = ph
+            self.store.insert_with_valuesv(-1, [0, 1, 2], [ph, "<b>%s</b>\n<small>%s</small>" % (a, b), g])
+        self.view.set_model(self.store)
+        self._art_gen = getattr(self, "_art_gen", 0) + 1
+        gen, store, n = self._art_gen, self.store, [0]
+
+        def covers():
+            if gen != self._art_gen:
+                return False
+            for _ in range(12):
+                i = n[0]
+                if i >= len(store):
+                    return False
+                n[0] += 1
+                g = store[i][2]
+                pb = art.for_song(g[0]["path"], 128)
+                if pb is not None:
+                    store[i][0] = pb
+            return True
+        GLib.idle_add(covers)
 
     def selected_rows(self):
         out = []
@@ -423,7 +516,9 @@ class AlbumList(Gtk.ScrolledWindow):
     def __init__(self, win):
         super().__init__()
         self.win = win
-        self.store = Gtk.TreeStore(GdkPixbuf.Pixbuf, str, str, str, int, object)
+        # a flat list (the album's row, then its songs) rather than a tree: expanding thousands of
+        # albums made the view take minutes on a big library (C8-10)
+        self.store = Gtk.ListStore(GdkPixbuf.Pixbuf, str, str, str, int, object)
         self.view = Gtk.TreeView(model=self.store)
         self.view.set_headers_visible(True)
         self.view.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
@@ -451,6 +546,7 @@ class AlbumList(Gtk.ScrolledWindow):
         self.add(self.view)
 
     def set_rows(self, rows):
+        self.view.set_model(None)       # filled detached, then shown: far quicker (C8-10)
         self.store.clear()
         groups, order = {}, []
         for r in rows:
@@ -460,6 +556,7 @@ class AlbumList(Gtk.ScrolledWindow):
                 order.append(k)
             groups[k].append(r)
         ph = art.placeholder(64, self.win.dark)
+        add = self.store.insert_with_valuesv
         for k in order:
             g = groups[k]
             r = g[0]
@@ -467,11 +564,34 @@ class AlbumList(Gtk.ScrolledWindow):
                 GLib.markup_escape_text(r["album"] or "Unknown Album"),
                 GLib.markup_escape_text(r["album_artist"] or r["artist"] or ""), len(g),
                 fmt_time(sum(x["duration"] or 0 for x in g)))
-            parent = self.store.append(None, [art.for_song(r["path"], 64) or ph, head, "", "", -1, g])
+            add(-1, [0, 1, 2, 3, 4, 5], [ph, head, "", "", -1, g])
             for i, x in enumerate(g):
-                self.store.append(parent, [None, "", "%s%s" % ("%d. " % x["track_no"] if x["track_no"] else "", x["title"] or ""),
-                                           fmt_time(x["duration"]), i, g])
-        self.view.expand_all()
+                add(-1, [2, 3, 4, 5], ["%s%s" % ("%d. " % x["track_no"] if x["track_no"] else "", x["title"] or ""),
+                                       fmt_time(x["duration"]), i, g])
+        self.view.set_model(self.store)
+        # the covers come in afterwards, a few at a time, so the list shows at once
+        self._art_gen = getattr(self, "_art_gen", 0) + 1
+        gen, store = self._art_gen, self.store
+        heads = []
+        k = 0
+        for key in order:
+            heads.append(k)
+            k += 1 + len(groups[key])
+
+        def covers():
+            if gen != self._art_gen:
+                return False
+            for _ in range(12):
+                if not heads:
+                    return False
+                it = store.iter_nth_child(None, heads.pop(0))
+                if it is None:
+                    return False
+                pb = art.for_song(store.get_value(it, 5)[0]["path"], 64)
+                if pb is not None:
+                    store.set_value(it, 0, pb)
+            return True
+        GLib.idle_add(covers)
 
     def _activated(self, v, path, col):
         row = self.store[path]
@@ -676,3 +796,10 @@ class CoverFlow(Gtk.DrawingArea):
             self.emit("play", self.albums[self.index])
             return True
         return False
+
+
+def _children(store):
+    it = store.get_iter_first()
+    while it is not None:
+        yield it
+        it = store.iter_next(it)

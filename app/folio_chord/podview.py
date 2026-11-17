@@ -433,6 +433,9 @@ class PodcastsView(Gtk.Box):
         def fail(e):
             self.downloading.pop(eid, None)
             self.fill_episodes()
+            ep = self.pods.episode(eid)
+            self.win.lcd.set_busy("“%s” couldn't be downloaded: %s" % (ep["title"] if ep else "The episode", net.explain(e)))
+            GLib.timeout_add_seconds(5, lambda: (self.win.lcd.set_busy(None), False)[1])
         net.in_thread(work, done, fail)
         self.fill_episodes()
 
@@ -480,7 +483,7 @@ class PodcastsView(Gtk.Box):
         def fail(e):
             self.win.lcd.set_busy(None)
             if not quiet:
-                self.win.info("That podcast couldn't be subscribed to: %s" % e)
+                self.win.info("That podcast couldn't be subscribed to: %s." % net.explain(e))
         net.in_thread(lambda: self.pods.subscribe(url), done, fail)
 
     # ---------------------------------------------------------------- the directory
@@ -528,7 +531,7 @@ class PodcastsView(Gtk.Box):
         def fail(e):
             if seq != self._dir_seq:
                 return
-            self.dir_hint.set_text("The directory couldn't be reached: %s" % e)
+            self.dir_hint.set_text("The podcast directory couldn't be reached: %s." % net.explain(e))
         net.in_thread(fn, done, fail)
 
     def fill_dir(self, shows):

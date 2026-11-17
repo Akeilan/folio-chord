@@ -40,7 +40,7 @@ def main():
     pump(0.4)
     # views
     w.run("view:albums")
-    check(w.songview.get_visible_child_name() == "albums" and len(w.albumlist.store) == 3, "album list: three albums")
+    check(w.songview.get_visible_child_name() == "albums" and len([r for r in w.albumlist.store if r[4] < 0]) == 3, "album list: three albums")
     w.run("view:grid")
     check(w.songview.get_visible_child_name() == "grid" and len(w.grid.store) == 3, "grid of album covers")
     shot(w, "lib_grid")

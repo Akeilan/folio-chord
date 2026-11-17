@@ -152,18 +152,90 @@ def _duration(s):
 
 
 def _date(s):
-    try:
-        return email.utils.parsedate_to_datetime(s).timestamp()
-    except Exception:       # noqa: BLE001
+    """A feed's date in any of the forms feeds use: RFC 822 (the standard), ISO 8601 (Atom and many
+    hand-made feeds) or plain "1 Sep 2025" (C8-32)."""
+    import datetime
+    s = (s or "").strip()
+    if not s:
         return 0.0
+    try:
+        d = email.utils.parsedate_to_datetime(s)
+        if d is not None:
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=datetime.timezone.utc)
+            return d.timestamp()
+    except Exception:       # noqa: BLE001
+        pass
+    iso = s.replace("Z", "+00:00")
+    try:
+        d = datetime.datetime.fromisoformat(iso)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=datetime.timezone.utc)
+        return d.timestamp()
+    except ValueError:
+        pass
+    for fmt in ("%d %b %Y", "%d %B %Y", "%B %d, %Y", "%b %d, %Y", "%Y-%m-%d", "%a, %d %b %Y", "%d/%m/%Y"):
+        try:
+            return datetime.datetime.strptime(s, fmt).replace(tzinfo=datetime.timezone.utc).timestamp()
+        except ValueError:
+            continue
+    return 0.0
 
 
-def parse_feed(data):
-    """A podcast RSS feed: ({"title", "author", "description", "artwork", "link", "genre"}, [episode])."""
-    root = ET.fromstring(data)
+ATOM_NS = "http://www.w3.org/2005/Atom"
+
+
+def _xml(data):
+    """The feed's XML, forgiving what real feeds get wrong: blank lines before the declaration and
+    a bare & in a title (C8-32)."""
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    data = data.lstrip(b"\xef\xbb\xbf").lstrip()
+    try:
+        return ET.fromstring(data)
+    except ET.ParseError as first:
+        fixed = re.sub(rb"&(?!(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);)", b"&amp;", data)
+        if fixed == data:
+            raise first
+        return ET.fromstring(fixed)
+
+
+def _parse_atom(root, base):
+    from urllib.parse import urljoin
+    a = {"a": ATOM_NS}
+
+    def text(el, path):
+        x = el.find(path, a)
+        return (x.text or "").strip() if x is not None and x.text else ""
+    link = next((l.get("href") for l in root.findall("a:link", a) if l.get("rel", "alternate") == "alternate"), "")
+    icon = text(root, "a:logo") or text(root, "a:icon")
+    show = {"title": text(root, "a:title"), "author": text(root, "a:author/a:name"),
+            "description": text(root, "a:subtitle"), "artwork": icon, "link": link or "", "genre": ""}
+    eps = []
+    for en in root.findall("a:entry", a):
+        enc = next((l for l in en.findall("a:link", a) if l.get("rel") == "enclosure"), None)
+        if enc is None or not enc.get("href"):
+            continue
+        url = urljoin(base, enc.get("href")) if base else enc.get("href")
+        eps.append({"guid": text(en, "a:id") or url, "title": text(en, "a:title"),
+                    "published": _date(text(en, "a:published") or text(en, "a:updated")), "duration": 0.0,
+                    "url": url, "mime": enc.get("type") or "",
+                    "size": int(enc.get("length")) if (enc.get("length") or "").isdigit() else 0,
+                    "description": text(en, "a:content") or text(en, "a:summary"),
+                    "link": next((l.get("href") for l in en.findall("a:link", a) if l.get("rel", "alternate") == "alternate"), "")})
+    return show, eps
+
+
+def parse_feed(data, base=None):
+    """A podcast RSS or Atom feed: ({"title", "author", "description", "artwork", "link", "genre"},
+    [episode]). base: the feed's address, for episode addresses given relative to it."""
+    from urllib.parse import urljoin
+    root = _xml(data)
+    if root.tag == "{%s}feed" % ATOM_NS:
+        return _parse_atom(root, base)
     ch = root.find("channel")
     if ch is None:
-        raise ValueError("not a podcast feed")
+        raise ValueError("the address doesn't lead to a podcast feed")
     ns = {"itunes": ITUNES_NS, "content": CONTENT_NS}
     img = ch.find("itunes:image", ns)
     art = img.get("href") if img is not None else _text(ch, "image/url")
@@ -172,13 +244,19 @@ def parse_feed(data):
             "description": _text(ch, "description") or _text(ch, "itunes:summary", ns), "artwork": art or "",
             "link": _text(ch, "link"), "genre": cat.get("text") if cat is not None else ""}
     eps = []
+    seen_guids = set()
     for it in ch.findall("item"):
         enc = it.find("enclosure")
         if enc is None or not enc.get("url"):
             continue
-        guid = _text(it, "guid") or enc.get("url")
-        eps.append({"guid": guid, "title": _text(it, "title"), "published": _date(_text(it, "pubDate")),
-                    "duration": _duration(_text(it, "itunes:duration", ns)), "url": enc.get("url"),
+        url = urljoin(base, enc.get("url")) if base else enc.get("url")
+        guid = _text(it, "guid") or url
+        if guid in seen_guids:
+            guid = "%s#%s" % (guid, url)        # a feed that repeats one guid keeps every episode
+        seen_guids.add(guid)
+        eps.append({"guid": guid, "title": _text(it, "title"),
+                    "published": _date(_text(it, "pubDate") or _text(it, "{http://purl.org/dc/elements/1.1/}date")),
+                    "duration": _duration(_text(it, "itunes:duration", ns)), "url": url,
                     "mime": enc.get("type") or "", "size": int(enc.get("length") or 0) if (enc.get("length") or "").isdigit() else 0,
                     "description": _text(it, "content:encoded", ns) or _text(it, "description") or _text(it, "itunes:summary", ns),
                     "link": _text(it, "link")})
@@ -225,8 +303,10 @@ class Podcasts:
 
     def subscribe(self, feed, data=None):
         """Subscribe to a feed (fetching it unless data is given); returns the show's id."""
-        data = data if data is not None else net.get(feed)
-        show, eps = parse_feed(data)
+        if data is None:
+            data, moved = net.fetch(feed)
+            feed = moved or feed            # a feed that has moved is kept at its new address (C8-32)
+        show, eps = parse_feed(data, feed)
         with self.lib.lock:
             self.lib.db.execute("insert or ignore into podcasts(feed, title, author, description, artwork, link, genre, added, refreshed) "
                                 "values(?,?,?,?,?,?,?,?,?)", (feed, show["title"], show["author"], show["description"],
@@ -239,13 +319,15 @@ class Podcasts:
 
     def _store(self, pid, eps, first=False):
         new = []
+        # on subscribing only the newest episode is new, whichever end of the feed it is at (C8-31)
+        newest = max(range(len(eps)), key=lambda i: (eps[i]["published"], -i)) if eps else -1
         with self.lib.lock:
             for i, e in enumerate(eps):
                 cur = self.lib.db.execute(
                     "insert or ignore into episodes(podcast, guid, title, published, duration, url, mime, size, description, link, new) "
                     "values(?,?,?,?,?,?,?,?,?,?,?)", (pid, e["guid"], e["title"], e["published"], e["duration"], e["url"],
                                                       e["mime"], e["size"], e["description"], e["link"],
-                                                      0 if first and i > 0 else 1))
+                                                      0 if first and i != newest else 1))
                 if cur.rowcount:
                     new.append(cur.lastrowid)
                 else:
@@ -258,8 +340,18 @@ class Podcasts:
     def refresh(self, pid, data=None):
         """Fetch the feed again; returns the ids of new episodes."""
         p = self.show(pid)
-        data = data if data is not None else net.get(p["feed"])
-        show, eps = parse_feed(data)
+        feed = p["feed"]
+        if data is None:
+            data, moved = net.fetch(feed)
+            if moved and moved != feed:
+                with self.lib.lock:
+                    try:
+                        self.lib.db.execute("update podcasts set feed=? where id=?", (moved, pid))
+                        self.lib.db.commit()
+                        feed = moved
+                    except Exception:       # noqa: BLE001 — already subscribed at the new address
+                        pass
+        show, eps = parse_feed(data, feed)
         with self.lib.lock:
             self.lib.db.execute("update podcasts set title=?, author=?, description=?, artwork=? where id=?",
                                 (show["title"] or p["title"], show["author"], show["description"], show["artwork"] or p["artwork"], pid))
@@ -345,5 +437,13 @@ class Podcasts:
 
     @staticmethod
     def read_opml(path):
-        root = ET.parse(path).getroot()
-        return [(o.get("text") or o.get("title") or "", o.get("xmlUrl")) for o in root.iter("outline") if o.get("xmlUrl")]
+        """The shows in an OPML file, folders included; the feed attribute is read whatever its
+        case (xmlUrl, xmlurl) and as url when a program wrote that instead."""
+        root = _xml(open(path, "rb").read())
+        out = []
+        for o in root.iter("outline"):
+            attrs = {k.lower(): v for k, v in o.attrib.items()}
+            feed = attrs.get("xmlurl") or (attrs.get("url") if (attrs.get("type") or "rss").lower() in ("rss", "atom", "link", "") else None)
+            if feed and feed.lower().startswith(("http://", "https://")):
+                out.append((attrs.get("text") or attrs.get("title") or "", feed))
+        return out

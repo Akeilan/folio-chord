@@ -391,8 +391,13 @@ def _hsv(h, s, v):
 
 
 def up_next(win, relative):
-    """The songs coming up: Up Next first, then the rest of the list."""
+    """The songs coming up: Up Next first (drag to reorder, or move and remove with the buttons,
+    C8-42), then the rest of the list."""
     pb = win.app.playback
+    q = pb.queue
+    old = getattr(win, "up_next_popover", None)
+    if old is not None and old.get_visible() and old.get_relative_to() is relative:
+        old.popdown()
     pop = Gtk.Popover.new(relative)
     pop.get_style_context().add_class("chord-pop")
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -402,33 +407,91 @@ def up_next(win, relative):
     t.set_markup("<b>Up Next</b>")
     head.pack_start(t, True, True, 0)
     clear = Gtk.Button(label="Clear")
-    clear.connect("clicked", lambda *_: (pb.queue.clear_up_next(), pop.popdown()))
+    clear.set_tooltip_text("Take every song out of Up Next")
     head.pack_end(clear, False, False, 0)
     box.pack_start(head, False, False, 0)
     lb = Gtk.ListBox()
     lb.set_selection_mode(Gtk.SelectionMode.NONE)
-    items = pb.queue.upcoming(30)
-    for k in items:
-        it = pb._item_for(k)
-        if not it:
-            continue
-        row = Gtk.Box(spacing=8)
-        l = Gtk.Label(xalign=0)
-        l.set_ellipsize(Pango.EllipsizeMode.END)
-        l.set_max_width_chars(40)
-        l.set_markup("%s\n<small>%s</small>" % (GLib.markup_escape_text(it["title"] or ""), GLib.markup_escape_text(it.get("artist") or "")))
-        row.pack_start(l, True, True, 0)
-        row.pack_end(Gtk.Label(label=views.fmt_time(it.get("duration") or 0)), False, False, 0)
-        lb.add(row)
-    if not items:
-        lb.add(Gtk.Label(label="Nothing is coming up. Choose Play Next or Add to Up Next on songs."))
     sw = Gtk.ScrolledWindow()
     sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    sw.set_size_request(360, min(420, 50 + 44 * max(1, len(items))))
     sw.add(lb)
     box.pack_start(sw, True, True, 0)
     pop.add(box)
+    target = [Gtk.TargetEntry.new("application/x-chord-upnext", Gtk.TargetFlags.SAME_WIDGET, 0)]
+    shown = []
+
+    def small(icon_name, tip, cb):
+        b = Gtk.Button.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+        b.set_relief(Gtk.ReliefStyle.NONE)
+        b.set_tooltip_text(tip)
+        b.connect("clicked", lambda *_: cb())
+        return b
+
+    def changed():
+        fill()
+        pb._emit("modes")
+
+    def fill():
+        for c in lb.get_children():
+            lb.remove(c)
+        shown.clear()
+        queued = list(q.up_next)
+        rest = [k for k in q.upcoming(30 + len(queued))[len(queued):]][:30]
+        for i, k in enumerate(queued):
+            it = pb._item_for(k)
+            if not it:
+                continue
+            row = Gtk.ListBoxRow()
+            hb = Gtk.Box(spacing=6)
+            grip = Gtk.EventBox()
+            grip.add(Gtk.Image.new_from_icon_name("open-menu-symbolic", Gtk.IconSize.MENU))
+            grip.set_tooltip_text("Drag to move")
+            grip.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, target, Gdk.DragAction.MOVE)
+            grip.connect("drag-data-get", lambda w, ctx, data, info, tm, i=i: data.set_text(str(i), -1))
+            hb.pack_start(grip, False, False, 0)
+            l = Gtk.Label(xalign=0)
+            l.set_ellipsize(Pango.EllipsizeMode.END)
+            l.set_max_width_chars(34)
+            l.set_markup("%s\n<small>%s</small>" % (GLib.markup_escape_text(it["title"] or ""), GLib.markup_escape_text(it.get("artist") or "")))
+            hb.pack_start(l, True, True, 0)
+            hb.pack_end(small("window-close-symbolic", "Take out of Up Next", lambda i=i: (q.remove_up_next(i), changed())), False, False, 0)
+            hb.pack_end(small("go-down-symbolic", "Move down", lambda i=i: (q.move_up_next(i, i + 1), changed())), False, False, 0)
+            hb.pack_end(small("go-up-symbolic", "Move up", lambda i=i: (q.move_up_next(i, i - 1), changed())), False, False, 0)
+            hb.pack_end(Gtk.Label(label=views.fmt_time(it.get("duration") or 0)), False, False, 0)
+            row.add(hb)
+            row.drag_dest_set(Gtk.DestDefaults.ALL, target, Gdk.DragAction.MOVE)
+            row.connect("drag-data-received", lambda w, ctx, x, y, data, info, tm, i=i:
+                        (q.move_up_next(int(data.get_text() or -1), i), changed()))
+            lb.add(row)
+            shown.append(k)
+        if rest:
+            src = Gtk.Label(xalign=0)
+            src.set_markup("<small>Then, from the list:</small>")
+            src.get_style_context().add_class("chord-dim")
+            src.set_margin_top(4)
+            lb.add(src)
+        for k in rest:
+            it = pb._item_for(k)
+            if not it:
+                continue
+            row = Gtk.Box(spacing=8)
+            l = Gtk.Label(xalign=0)
+            l.set_ellipsize(Pango.EllipsizeMode.END)
+            l.set_max_width_chars(40)
+            l.set_markup("%s\n<small>%s</small>" % (GLib.markup_escape_text(it["title"] or ""), GLib.markup_escape_text(it.get("artist") or "")))
+            row.pack_start(l, True, True, 0)
+            row.pack_end(Gtk.Label(label=views.fmt_time(it.get("duration") or 0)), False, False, 0)
+            lb.add(row)
+            shown.append(k)
+        if not shown:
+            lb.add(Gtk.Label(label="Nothing is coming up. Choose Play Next or Add to Up Next on songs."))
+        clear.set_sensitive(bool(q.up_next))
+        sw.set_size_request(400, min(440, 60 + 46 * max(1, len(shown))))
+        lb.show_all()
+    clear.connect("clicked", lambda *_: (q.clear_up_next(), changed()))
+    fill()
     box.show_all()
     pop.popup()
     win.up_next_popover = pop
-    return [x for x in items]
+    pop.fill = fill
+    return list(shown)

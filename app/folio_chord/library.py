@@ -5,6 +5,7 @@ Ratings are 0-100 in steps of 20 (one to five stars), as iTunes keeps them.
 """
 import json
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -72,6 +73,15 @@ DEFAULT_SMART = [
 ]
 
 
+def _num(v):
+    """A rule's number; anything that isn't one counts as 0 (the Smart Playlist window checks
+    what is typed before it gets here)."""
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _clause(spec, now, members, depth=0):
     """SQL for one group of rules: (expression, params). A rule is [column, op, value, value2/unit],
     or a nested group {"match": "all"|"any", "rules": [...]} (C3-22)."""
@@ -82,6 +92,8 @@ def _clause(spec, now, members, depth=0):
                 sub, sp = _clause(r, now, members, depth + 1)
                 parts.append(sub)
                 params += sp
+            continue
+        if not isinstance(r, (list, tuple)) or len(r) < 2:
             continue
         col, op = r[0], r[1]
         if col == "playlist":
@@ -111,25 +123,27 @@ def _clause(spec, now, members, depth=0):
                 parts.append("%s like ? escape '\\'" % c); params.append("%" + _esc(v))
         elif kind in ("number", "rating"):
             c = "coalesce(%s,0)" % col
+            if col == "duration":
+                c = "round(coalesce(duration,0))"      # whole seconds, as the list shows them
             if op == "is":
-                parts.append("%s = ?" % c); params.append(float(v or 0))
+                parts.append("%s = ?" % c); params.append(_num(v))
             elif op == "is not":
-                parts.append("%s <> ?" % c); params.append(float(v or 0))
+                parts.append("%s <> ?" % c); params.append(_num(v))
             elif op == "is greater than":
-                parts.append("%s > ?" % c); params.append(float(v or 0))
+                parts.append("%s > ?" % c); params.append(_num(v))
             elif op == "is less than":
-                parts.append("%s < ?" % c); params.append(float(v or 0))
+                parts.append("%s < ?" % c); params.append(_num(v))
             elif op == "is in the range":
-                parts.append("%s between ? and ?" % c); params += [float(v or 0), float(v2 or 0)]
+                parts.append("%s between ? and ?" % c); params += [_num(v), _num(v2)]
         elif kind == "date":
             if op in ("is in the last", "is not in the last"):
-                since = now - float(v or 0) * UNITS.get(v2 or "days", 86400)
+                since = now - _num(v) * UNITS.get(v2 or "days", 86400)
                 parts.append(("coalesce(%s,0) >= ?" if op == "is in the last" else "coalesce(%s,0) < ?") % col)
                 params.append(since)
             elif op == "is after":
-                parts.append("coalesce(%s,0) > ?" % col); params.append(float(v or 0))
+                parts.append("coalesce(%s,0) > ?" % col); params.append(_num(v))
             elif op == "is before":
-                parts.append("coalesce(%s,0) < ?" % col); params.append(float(v or 0))
+                parts.append("coalesce(%s,0) < ?" % col); params.append(_num(v))
         elif kind == "bool":
             parts.append("coalesce(%s,0) %s 0" % (col, "<>" if op == "is true" else "="))
     joiner = " and " if spec.get("match", "all") == "all" else " or "
@@ -147,11 +161,59 @@ def rules_sql(spec, now=None, members=None):
         where = "(%s) and checked" % where
     where = "(%s) and not missing" % where
     order = SELECTED_BY.get(spec.get("selected_by") or "", None)
-    return where, params, order, spec.get("limit")
+    if spec.get("selected_by") == "random":
+        # a fixed shuffle (C8-16): the same songs until the rules are changed, not a new set each
+        # time the list is shown
+        seed = int(spec.get("seed") or 0) % 2147483647
+        order = "((id * 48271 + %d) %% 2147483647)" % seed
+    limit = spec.get("limit")
+    if limit and (not isinstance(limit, (list, tuple)) or len(limit) < 2 or limit[1] not in LIMIT_BY):
+        limit = None
+    return where, params, order, limit
 
 
 def _esc(s):
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _usable(path):
+    """True when the file is a library that opens and passes SQLite's own check."""
+    try:
+        db = sqlite3.connect(path)
+        try:
+            ok = db.execute("pragma quick_check").fetchone()[0] == "ok"
+            db.execute("select count(*) from tracks").fetchone()
+            return ok
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return False
+
+
+def open_library(path):
+    """The library at path, as (Library, note). A damaged file (C8-01) is kept beside it as
+    library.db.damaged and the last good copy (library.db.bak, made each time Chord starts) takes
+    its place; with no good copy a new library is started. note says what happened, or is None."""
+    note = None
+    if os.path.exists(path) and os.path.getsize(path) and not _usable(path):
+        kept = path + ".damaged"
+        shutil.move(path, kept)
+        for extra in ("-wal", "-shm", "-journal"):
+            if os.path.exists(path + extra):
+                shutil.move(path + extra, kept + extra)
+        bak = path + ".bak"
+        if os.path.exists(bak) and _usable(bak):
+            shutil.copy2(bak, path)
+            note = ("Your library file was damaged, so the copy kept on %s was used instead. Changes made "
+                    "after then (ratings, plays, playlists) are lost. The damaged file was kept as %s."
+                    % (time.strftime("%x", time.localtime(os.path.getmtime(bak))), os.path.basename(kept)))
+        else:
+            note = ("Your library file was damaged and there was no good copy of it, so a new library was "
+                    "started. Your music folders are being looked through again; ratings, plays and "
+                    "playlists couldn't be brought back. The damaged file was kept as %s." % os.path.basename(kept))
+    lib = Library(path)
+    lib.backup()
+    return lib, note
 
 
 class Library:
@@ -176,6 +238,24 @@ class Library:
             self.db.commit()
         self.listeners = []
         self.version = 0
+        self.new_ids = set()        # songs added (not refreshed) since this was last emptied
+        self.bad_names = []         # files whose names aren't valid text (C8-02)
+
+    def backup(self):
+        """A copy of the library beside it (library.db.bak), taken while it is known to be good."""
+        bak = self.path + ".bak"
+        tmp = bak + ".tmp"
+        try:
+            dst = sqlite3.connect(tmp)
+            with self.lock:
+                self.db.backup(dst)
+            dst.close()
+            os.replace(tmp, bak)
+        except (sqlite3.Error, OSError):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     # ---------------------------------------------------------------- small things
     def get(self, k, default=None):
@@ -188,11 +268,13 @@ class Library:
             self.db.execute("insert or replace into kv(k, v) values(?,?)", (k, v))
             self.db.commit()
 
-    def changed(self, what="tracks"):
+    def changed(self, what="tracks", ids=None):
+        """Tell the window what changed: ids, when given, are the only songs a "tracks" or "plays"
+        change touched (so it can redraw those rows instead of the whole list, C8-10)."""
         self.version += 1
         for fn in list(self.listeners):
             try:
-                fn(what)
+                fn(what, ids)
             except Exception:
                 import traceback
                 traceback.print_exc()
@@ -216,10 +298,25 @@ class Library:
             self.db.execute("delete from folders where path=?", (path,))
             self.db.commit()
 
+    def songs_only_in(self, path, keep=()):
+        """The songs inside path that no other folder in keep holds (C8-23)."""
+        pre = os.path.abspath(path).rstrip("/") + "/"
+        others = [os.path.abspath(k).rstrip("/") + "/" for k in keep if os.path.abspath(k) != os.path.abspath(path)]
+        return [r["id"] for r in self.q("select id, path from tracks") if r["path"].startswith(pre)
+                and not any(r["path"].startswith(o) for o in others)]
+
     # ---------------------------------------------------------------- tracks
     def add_file(self, path, commit=True):
         """Add or refresh one song file; returns its id (None if it isn't a song)."""
         path = os.path.abspath(path)
+        try:
+            path.encode("utf-8")
+        except UnicodeEncodeError:
+            # a name that isn't valid text (an old Windows or Mac drive): it can't be kept in the
+            # library, so it is reported rather than ending the scan (C8-02)
+            if path not in self.bad_names:
+                self.bad_names.append(path)
+            return None
         try:
             st = os.stat(path)
         except OSError:
@@ -249,6 +346,7 @@ class Library:
                                       % (", ".join(cols), ", ".join("?" * len(cols))),
                                       [path] + vals + [st.st_size, st.st_mtime, now, now])
                 tid = cur.lastrowid
+                self.new_ids.add(tid)
             if commit:
                 self.db.commit()
         return tid
@@ -258,21 +356,21 @@ class Library:
         missing. Returns (added or refreshed, missing)."""
         seen = set()
         n = 0
+        self.bad_names = []
+        self.new_ids = set()
         for top in self.folders():
-            for d, dirs, files in os.walk(top):
-                dirs[:] = sorted(x for x in dirs if not x.startswith("."))
-                for fn in sorted(files):
-                    if stop and stop():
-                        return n, 0
-                    p = os.path.join(d, fn)
-                    if not tags.is_audio(p):
-                        continue
+            for p in walk_audio(top):
+                if stop and stop():
+                    return n, 0
+                try:
                     tid = self.add_file(p, commit=False)
-                    if tid:
-                        seen.add(tid)
-                        n += 1
-                        if progress and n % 25 == 0:
-                            progress(n)
+                except Exception:       # noqa: BLE001 — one odd file never ends the scan (C8-02)
+                    tid = None
+                if tid:
+                    seen.add(tid)
+                    n += 1
+                    if progress and n % 25 == 0:
+                        progress(n)
         with self.lock:
             self.db.commit()
         tops = self.folders()
@@ -287,8 +385,50 @@ class Library:
                 gone += 1
         with self.lock:
             self.db.commit()
+        self.follow_moves(self.new_ids)
         self.changed()
         return n, gone
+
+    # ---------------------------------------------------------------- moved songs (C8-05)
+    KEEP = ("rating", "play_count", "last_played", "skip_count", "last_skipped", "date_added", "checked",
+            "start_time", "stop_time", "volume_adjust", "eq", "remember_position", "position", "skip_shuffle")
+
+    def follow_moves(self, new_ids):
+        """Songs that turned up under a new name or in another folder are the missing songs they
+        were moved from: the missing song takes the new place, so its rating, plays and playlists
+        stay. A song is matched by its size and length, and its tags or its file name."""
+        new_ids = set(new_ids or ())
+        if not new_ids:
+            return 0
+        missing = [r for r in self.q("select * from tracks where missing=1") if not os.path.exists(r["path"])]
+        if not missing:
+            return 0
+        followed = 0
+        for nid in sorted(new_ids):
+            new = self.track(nid)
+            if new is None or new["missing"]:
+                continue
+
+            def same(a, b):
+                return (a or "").strip().lower() == (b or "").strip().lower()
+            cands = [m for m in missing if m["size"] == new["size"] and abs((m["duration"] or 0) - (new["duration"] or 0)) < 0.5
+                     and ((same(m["title"], new["title"]) and same(m["artist"], new["artist"]) and same(m["album"], new["album"]))
+                          or os.path.basename(m["path"]) == os.path.basename(new["path"]))]
+            if not cands:
+                continue
+            old = sorted(cands, key=lambda m: os.path.basename(m["path"]) != os.path.basename(new["path"]))[0]
+            missing.remove(old)
+            cols = [c for c in new.keys() if c not in ("id",) + self.KEEP]
+            with self.lock:
+                self.db.execute("delete from tracks where id=?", (nid,))
+                self.db.execute("update playlist_items set track=? where track=?", (old["id"], nid))
+                self.db.execute("update tracks set %s where id=?" % ", ".join("%s=?" % c for c in cols),
+                                [new[c] for c in cols] + [old["id"]])
+                self.db.execute("update tracks set missing=0 where id=?", (old["id"],))
+                self.db.commit()
+            self.new_ids.discard(nid)
+            followed += 1
+        return followed
 
     def track(self, tid):
         r = self.q("select * from tracks where id=?", (tid,))
@@ -309,7 +449,7 @@ class Library:
                 self.db.execute("update tracks set %s where id=?" % ", ".join("%s=?" % k for k in fields),
                                 list(fields.values()) + [tid])
             self.db.commit()
-        self.changed()
+        self.changed("tracks", list(ids))
 
     def remove(self, ids):
         with self.lock:
@@ -324,7 +464,7 @@ class Library:
             self.db.execute("update tracks set play_count=coalesce(play_count,0)+1, last_played=?, position=0 where id=?",
                             (time.time(), tid))
             self.db.commit()
-        self.changed("plays")
+        self.changed("plays", [tid])
 
     def skipped(self, tid):
         with self.lock:
@@ -390,6 +530,15 @@ class Library:
         self.changed("playlists")
 
     def move_playlist(self, pid, parent):
+        # a folder can't go inside itself, or inside a folder within it
+        p = parent
+        seen = set()
+        while p is not None and p not in seen:
+            if p == pid:
+                return False
+            seen.add(p)
+            r = self.playlist(p)
+            p = r["parent"] if r is not None else None
         with self.lock:
             self.db.execute("update playlists set parent=? where id=?", (parent, pid))
             self.db.commit()
@@ -417,18 +566,24 @@ class Library:
             self.db.commit()
         self.changed("playlist-items")
 
+    def _items(self, pid):
+        return [(r["pos"], r["track"]) for r in self.q("select pos, track from playlist_items where playlist=? order by pos", (pid,))]
+
     def remove_from_playlist(self, pid, positions):
-        items = [r["track"] for r in self.q("select track from playlist_items where playlist=? order by pos", (pid,))]
-        keep = [t for i, t in enumerate(items) if i not in set(positions)]
-        self._set_items(pid, keep)
+        """Take out the songs at these places (pl_pos values, as playlist_tracks gives them)."""
+        gone = set(positions)
+        self._set_items(pid, [t for p, t in self._items(pid) if p not in gone])
 
     def reorder_playlist(self, pid, positions, to):
-        items = [r["track"] for r in self.q("select track from playlist_items where playlist=? order by pos", (pid,))]
-        moving = [items[i] for i in sorted(positions)]
-        rest = [t for i, t in enumerate(items) if i not in set(positions)]
-        to = to - sum(1 for i in positions if i < to)
-        rest[to:to] = moving
-        self._set_items(pid, rest)
+        """Move the songs at these places (pl_pos) to just before place to (a pl_pos, or past the end)."""
+        items = self._items(pid)
+        move = set(positions)
+        moving = [t for p, t in items if p in move]
+        rest = [(p, t) for p, t in items if p not in move]
+        at = next((i for i, (p, _t) in enumerate(rest) if p >= to), len(rest))
+        out = [t for _p, t in rest]
+        out[at:at] = moving
+        self._set_items(pid, out)
 
     def _set_items(self, pid, tids):
         with self.lock:
@@ -438,7 +593,7 @@ class Library:
             self.db.commit()
         self.changed("playlist-items")
 
-    def playlist_tracks(self, pid):
+    def playlist_tracks(self, pid, _path=None):
         p = self.playlist(pid)
         if p is None:
             return []
@@ -446,13 +601,18 @@ class Library:
             return self.smart_tracks(json.loads(p["rules"] or "{}"), _seen={pid})
         if p["kind"] == "folder":
             out, seen = [], set()
+            _path = set(_path or ()) | {pid}
             for c in self.q("select id from playlists where parent=? order by position", (pid,)):
-                for r in self.playlist_tracks(c["id"]):
+                if c["id"] in _path:
+                    continue            # a loop of folders made by an older version
+                for r in self.playlist_tracks(c["id"], _path):
                     if r["id"] not in seen:
                         seen.add(r["id"])
                         out.append(r)
             return out
-        return self.q("select t.* from playlist_items i join tracks t on t.id=i.track where i.playlist=? and not t.missing order by i.pos", (pid,))
+        # pl_pos: the song's place in the playlist, missing songs counted (C8-03)
+        return self.q("select t.*, i.pos as pl_pos from playlist_items i join tracks t on t.id=i.track "
+                      "where i.playlist=? and not t.missing order by i.pos", (pid,))
 
     def smart_tracks(self, spec, now=None, _seen=None):
         seen = set(_seen or ())
@@ -473,8 +633,8 @@ class Library:
             return rows
         n, unit = limit
         if unit == "items":
-            return rows[:int(n)]
-        cap = float(n) * {"minutes": 60, "hours": 3600, "MB": 1e6, "GB": 1e9}[unit]
+            return rows[:int(_num(n))]
+        cap = _num(n) * {"minutes": 60, "hours": 3600, "MB": 1e6, "GB": 1e9}[unit]
         col = LIMIT_BY[unit]
         out, total = [], 0.0
         for r in rows:
@@ -490,21 +650,66 @@ class Library:
         with open(path, "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")
             for r in rows:
-                f.write("#EXTINF:%d,%s - %s\n%s\n" % (int(r["duration"] or 0), r["artist"] or "", r["title"] or "", r["path"]))
+                clean = lambda x: " ".join((x or "").split())  # noqa: E731 — a line break would end the entry
+                f.write("#EXTINF:%d,%s - %s\n%s\n" % (int(r["duration"] or 0), clean(r["artist"]), clean(r["title"]), r["path"]))
 
     def import_m3u(self, path, name=None):
+        """A playlist from an .m3u, .m3u8 or .pls file (C8-17). Entries are found by their path, a
+        path written on Windows or a Mac (by the last folders and the name), or a file:// address.
+        self.import_missing then holds the entries that couldn't be found."""
+        import re
+        from urllib.parse import unquote, urlparse
         base = os.path.dirname(os.path.abspath(path))
-        tids = []
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("file://"):
-                    from urllib.parse import unquote, urlparse
-                    line = unquote(urlparse(line).path)
-                p = line if os.path.isabs(line) else os.path.join(base, line)
-                tid = self.add_file(p)
-                if tid:
-                    tids.append(tid)
+        raw = open(path, "rb").read()
+        for enc in ("utf-8-sig", "cp1252", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        lines = [ln.strip() for ln in text.splitlines()]
+        if any(re.match(r"(?i)^\[playlist\]", ln) for ln in lines):
+            pairs = sorted((int(n), u.strip()) for n, u in (re.findall(r"(?im)^File(\d+)\s*=\s*(.+)$", text)))
+            entries = [u for _n, u in pairs]
+        else:
+            entries = [ln for ln in lines if ln and not ln.startswith("#")]
+        by_tail = {}
+        for r in self.q("select id, path from tracks where not missing"):
+            parts = [x.lower() for x in r["path"].split("/")]
+            for k in (3, 2):
+                by_tail.setdefault(tuple(parts[-k:]), r["id"])
+        tids, self.import_missing = [], []
+        for e in entries:
+            if re.match(r"(?i)^[a-z][a-z0-9+.-]*://", e) and not e.lower().startswith("file://"):
+                self.import_missing.append(e)          # a stream: not a song in the library
+                continue
+            p = unquote(urlparse(e).path) if e.lower().startswith("file://") else e
+            p = os.path.expanduser(p.replace("\\", "/"))
+            if re.match(r"^[A-Za-z]:/", p):
+                p = p[2:]
+            cand = p if os.path.isabs(p) else os.path.normpath(os.path.join(base, p))
+            tid = self.add_file(cand) if os.path.isfile(cand) else None
+            if tid is None:
+                parts = [x.lower() for x in p.split("/") if x]
+                tid = by_tail.get(tuple(parts[-3:])) or by_tail.get(tuple(parts[-2:]))
+            if tid:
+                tids.append(tid)
+            else:
+                self.import_missing.append(e)
         return self.new_playlist(name or os.path.splitext(os.path.basename(path))[0], tracks=tids)
+
+
+def walk_audio(top):
+    """The song files under top, following linked folders (C8-24) but never into a loop, and
+    leaving out hidden folders."""
+    seen = set()
+    for d, dirs, files in os.walk(top, followlinks=True):
+        real = os.path.realpath(d)
+        if real in seen:
+            dirs[:] = []
+            continue
+        seen.add(real)
+        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
+        for fn in sorted(files):
+            if tags.is_audio(fn):
+                yield os.path.join(d, fn)

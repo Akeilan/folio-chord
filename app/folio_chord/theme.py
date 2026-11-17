@@ -50,9 +50,11 @@ CSS = """
 menubar.chord-menubar { background-color: %(top1)s; background-image: none; border-bottom: 1px solid %(line)s;
   padding: 0; box-shadow: none; }
 menubar.chord-menubar > menuitem { padding: 3px 9px; color: %(top_fg)s; background-color: %(top1)s; background-image: none; }
-menubar.chord-menubar > menuitem label { color: %(top_fg)s; }
+menubar.chord-menubar > menuitem > label { color: %(top_fg)s; }
 menubar.chord-menubar > menuitem:hover { background-color: %(menu_hover)s; }
-menubar.chord-menubar > menuitem:hover label { color: %(menu_hover_fg)s; }
+/* only the menu bar's own label: a plain descendant rule also reached every item of the open
+   menu (white on light grey, C8-38) */
+menubar.chord-menubar > menuitem:hover > label { color: %(menu_hover_fg)s; }
 .chord-own menu, menu.chord-menu, .chord-own .menu, .chord-own .context-menu, window.popup menu {
   background-color: %(menu)s; background-image: none; color: %(menu_fg)s; border: 1px solid %(line)s; padding: 3px 0; }
 menu.chord-menu menuitem, .chord-own menu menuitem { padding: 4px 18px 4px 10px; color: %(menu_fg)s; }

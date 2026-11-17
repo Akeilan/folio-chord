@@ -318,8 +318,14 @@ class Remote:
         return self._json("/folio/playlists")
 
     def playlist(self, pid):
-        ids = set(self._json("/folio/playlist/%d" % int(pid)))
-        return [t for t in (self.songs or self.tracks()) if t["id"] in ids]
+        """The playlist's songs in its own order, a song that is in it twice shown twice (C8-28)."""
+        ids = self._json("/folio/playlist/%d" % int(pid))
+        by = {t["id"]: t for t in (self.songs or self.tracks())}
+        return [by[i] for i in ids if i in by]
+
+    def headers(self):
+        """What a request for one of its songs must carry: the passcode, when it has one (C8-27)."""
+        return {PASS_HEADER: self.passcode} if self.passcode else None
 
     def stream_url(self, tid):
         return "%s/folio/stream/%d" % (self.base, int(tid))

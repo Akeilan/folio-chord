@@ -4,7 +4,8 @@ A music player in the manner of the classic iTunes, for Zorin OS and Ubuntu: you
 internet radio and podcasts. Part of Folio Studio.
 
 - **Library**: watches your music folders (MP3, AAC/M4A, Apple Lossless, FLAC, Ogg Vorbis, Opus,
-  WAV, AIFF). The column browser (Genres, Artists, Albums), list, album list and grid views, search,
+  WAV, AIFF, WMA, Monkey's Audio, WavPack, MP2 and Matroska audio), following songs that are renamed
+  or moved and linked folders. The column browser (Genres, Artists, Albums), list, album list and grid views, search,
   ratings, play counts, Get Info (tags and artwork written into the files).
 - **Playlists**: playlists and folders, Smart Playlists with rules, limits and live updating
   (iTunes' own six to start with), M3U import and export.
@@ -28,12 +29,25 @@ internet radio and podcasts. Part of Folio Studio.
 The Store, sign-in, Match and device sync aren't part of it; their menu items say so. Nothing is
 sent anywhere except the requests to the directories above when you use them.
 
+## What's new in 0.3
+
+- Menus can be read again when opened from the menu bar.
+- Songs renamed or moved in Files keep their ratings, plays and playlists; a damaged library file
+  is replaced by the copy kept each time Chord starts.
+- Big libraries: ratings and plays redraw one row, and 40,000 songs show in about a second and a half.
+- WMA, Monkey's Audio, WavPack, MP2 and Matroska audio. Changing Matroska details needs mkvtoolnix.
+- Up Next songs can be reordered and taken out.
+- Remove Duplicate Items moves files to the Trash and offers exact duplicates first.
+- Files, folders and playlists can be dragged in from Files; stations that drop out are tried
+  again; passcodes go in the desktop's keyring.
+
 ## Running and testing
 
     cd app && python3 -m folio_chord
     python3 tests/test_engine.py; python3 tests/test_net.py        # engine, radio and podcasts
     python3 tests/test_sharing.py                                  # Home Sharing
     python3 tests/test_cast.py                                     # network speakers
+    python3 tests/test_backlog8.py                                 # Backlog 8 (files, feeds, formats)
     sh tests/run_ui.sh ui_library.py                               # UI tests, on an X display
     sh tests/theme_run.sh                                          # desktop themes (X2-01)
     sh build-deb.sh out/                                           # the package

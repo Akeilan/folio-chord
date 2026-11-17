@@ -73,6 +73,9 @@ class _Pipe:
         self.eq = Gst.ElementFactory.make("equalizer-10bands")
         self.pan = Gst.ElementFactory.make("audiopanorama")      # balance (Chordamp, C3-28)
         conv2 = Gst.ElementFactory.make("audioconvert")
+        # a soft limiter after the gain and the equalizer, so Sound Check and boosts never clip (C8-19)
+        self.limit = Gst.ElementFactory.make("rglimiter")
+        conv3 = Gst.ElementFactory.make("audioconvert") if self.limit is not None else None
         self.spec = Gst.ElementFactory.make("spectrum")
         self.spec.set_property("bands", 256)
         self.spec.set_property("threshold", -70)
@@ -96,13 +99,21 @@ class _Pipe:
             self.pan.link(self.eq)
         else:
             self.gain.link(self.eq)
-        self.eq.link(conv2)
+        if self.limit is not None:
+            f.add(self.limit)
+            f.add(conv3)
+            self.eq.link(conv3)
+            conv3.link(self.limit)
+            self.limit.link(conv2)
+        else:
+            self.eq.link(conv2)
         conv2.link(self.spec)
         f.add_pad(Gst.GhostPad.new("sink", first.get_static_pad("sink")))
         self._probe = None
         f.add_pad(Gst.GhostPad.new("src", self.spec.get_static_pad("src")))
         self.pb.set_property("audio-filter", f)
         self.pb.connect("about-to-finish", self._about_to_finish)
+        self.pb.connect("source-setup", self._source_setup)
         bus = self.pb.get_bus()
         bus.add_signal_watch()
         bus.connect("message", self._message)
@@ -150,6 +161,16 @@ class _Pipe:
     def set_item(self, item):
         self.item = item
         self.pb.set_property("uri", item["uri"])
+
+    def _source_setup(self, pb, src):
+        """Headers an item asks for (a shared library's passcode, C8-27) go with its request."""
+        item = self.pending or self.item or {}
+        headers = item.get("headers")
+        if headers and src.find_property("extra-headers") is not None:
+            st = Gst.Structure.new_empty("extra-headers")
+            for k, v in headers.items():
+                st.set_value(k, v)
+            src.set_property("extra-headers", st)
 
     def _about_to_finish(self, pb):
         # called from a streaming thread: hand the next song to playbin straight away (gapless)
@@ -278,19 +299,34 @@ class Engine:
                 pipe.pb.set_state(Gst.State.NULL)
                 self.state = "stopped"
                 self._emit("eos", old)
+                if (old or {}).get("kind") == "station":
+                    self._emit("dropped", old)          # a live stream ended: the app reconnects (C8-29)
+                    self._emit("state", "stopped")
+                    return
                 nxt = self.next_fn() if self.next_fn else None
                 if nxt:
                     self.play(nxt)
                 else:
                     self._emit("state", "stopped")
+                    self._emit("ended")
             else:
                 pipe.pb.set_state(Gst.State.NULL)
         elif t == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
             if pipe is self.cur:
+                # the song that failed: the one queued next, when playbin had already moved on to it
+                failed = pipe.pending or pipe.item
+                pipe.pending = None
                 pipe.pb.set_state(Gst.State.NULL)
                 self.state = "stopped"
-                self._emit("error", (pipe.item, err.message))
+                missing = err.matches(Gst.CoreError.quark(), Gst.CoreError.MISSING_PLUGIN) or \
+                    err.matches(Gst.StreamError.quark(), Gst.StreamError.CODEC_NOT_FOUND)
+                if missing and "text/html" in (dbg or "") + err.message:
+                    missing = False             # a web page, not a stream that needs another part
+                    kind = "type"
+                kind = "missing-plugin" if missing else "type" if "text/html" in (dbg or "") else \
+                    "type" if err.matches(Gst.StreamError.quark(), Gst.StreamError.TYPE_NOT_FOUND) else ""
+                self._emit("error", (failed, err.message, kind))
         elif t == Gst.MessageType.TAG and pipe is self.cur:
             tl = msg.parse_tag()
             got = {}
@@ -448,6 +484,7 @@ class Engine:
                     self.state = "stopped"
                     self._emit("state", "stopped")
                     self._emit("eos", None)
+                    self._emit("ended")
         return True
 
     def pause(self):
@@ -457,6 +494,8 @@ class Engine:
                 self._emit("state", "paused")
             return
         if self.state == "playing":
+            # a crossfade under way ends at once: the song coming in is the one paused (C8-12)
+            self._cancel_fade()
             self.cur.pb.set_state(Gst.State.PAUSED)
             self.state = "paused"
             self._emit("state", "paused")
@@ -515,12 +554,21 @@ class Engine:
             if self.speaker.seek(max(0.0, secs)):
                 self.cast_pos = max(0.0, secs)
             return
+        if self.cur.pending is not None and self.cur.item is not None:
+            # in its last moments the next song is already handed to the player: start this one
+            # again at the place instead, so the seek lands in this song (C8-13)
+            item = dict(self.cur.item, start=max(0.0, secs), _started=False, _rated=False)
+            item.pop("_paused", None)
+            self.play(item)
+            self._emit("seeked", secs)
+            return
         t = int(max(0, secs) * Gst.SECOND)
         if self.rate != 1.0:        # keep the speed (a plain seek would set it back to 1x)
             self.cur.pb.seek(self.rate, Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT,
                              Gst.SeekType.SET, t, Gst.SeekType.NONE, -1)
         else:
             self.cur.pb.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, t)
+        self._emit("seeked", secs)
 
     def set_volume(self, v):
         self.volume = max(0.0, min(1.0, v))
@@ -620,6 +668,7 @@ class Engine:
                     self.play(nxt)
                 else:
                     self._emit("state", "stopped")
+                    self._emit("ended")
                 return True
             if self.crossfade > 0 and dur > self.crossfade * 2 and pos >= dur - self.crossfade and not self._fading:
                 nxt = self.next_fn() if self.next_fn else None

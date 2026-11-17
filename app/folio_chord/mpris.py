@@ -92,7 +92,39 @@ class Mpris:
               "xesam:album": GLib.Variant("s", n.get("album") or "")}
         if n.get("duration"):
             md["mpris:length"] = GLib.Variant("x", int(float(n["duration"]) * 1e6))
+        art = self.art_url(n)
+        if art:
+            md["mpris:artUrl"] = GLib.Variant("s", art)     # the cover the desktop shows (C8-36)
         return md
+
+    def art_url(self, n):
+        """A file: address of the song's cover (written to the cache once), or a podcast's own."""
+        if n.get("artwork"):
+            return n["artwork"]
+        path = n.get("path") or ""
+        if not path or "://" in path:
+            return ""
+        import hashlib
+        import os
+        d = os.path.join(GLib.get_user_cache_dir(), "folio-chord", "covers")
+        key = hashlib.md5(path.encode("utf-8", "surrogateescape")).hexdigest()
+        for ext in (".png", ".jpg"):
+            f = os.path.join(d, key + ext)
+            if os.path.exists(f):
+                return GLib.filename_to_uri(f, None)
+        try:
+            from . import tags
+            got = tags.artwork(path)
+        except Exception:       # noqa: BLE001
+            got = None
+        if not got:
+            return ""
+        data, mime = got
+        os.makedirs(d, exist_ok=True)
+        f = os.path.join(d, key + (".png" if "png" in (mime or "") else ".jpg"))
+        with open(f, "wb") as fh:
+            fh.write(data)
+        return GLib.filename_to_uri(f, None)
 
     def props(self, iface):
         pb = self._pb()
@@ -129,7 +161,16 @@ class Mpris:
         return True
 
     def _changed(self, ev, val):
-        if self.conn is None or ev not in ("state", "track", "tags", "volume", "modes"):
+        if self.conn is None:
+            return
+        if ev == "seeked":
+            # the desktop's position follows a seek (C8-36)
+            try:
+                self.conn.emit_signal(None, PATH, PLAYER, "Seeked", GLib.Variant("(x)", (int(self._pb().engine.position() * 1e6),)))
+            except GLib.Error:
+                pass
+            return
+        if ev not in ("state", "track", "tags", "volume", "modes"):
             return
         p = self.props(PLAYER)
         keys = {"state": ["PlaybackStatus"], "track": ["Metadata", "PlaybackStatus", "CanSeek"], "tags": ["Metadata"],

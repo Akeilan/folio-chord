@@ -46,6 +46,9 @@ def default_country():
 
 
 class Settings(dict):
+    # passcodes live in the keyring (or a file only you can read), not in settings.json (C8-37)
+    SECRET = ("share_pass", "share_known")
+
     def __init__(self):
         super().__init__(DEFAULTS)
         self.path = os.path.join(config_dir(), "settings.json")
@@ -54,6 +57,34 @@ class Settings(dict):
                 self.update(json.load(f))
         except (OSError, ValueError):
             pass
+        moved = False
+        for k in self.SECRET:
+            v = dict.get(self, k)
+            if v:
+                from . import keys
+                keys.save(k, v)
+                dict.__setitem__(self, k, DEFAULTS[k])
+                moved = True
+        if moved:
+            self.save()
+
+    def __getitem__(self, k):
+        if k in self.SECRET:
+            from . import keys
+            return keys.load(k, DEFAULTS[k])
+        return dict.__getitem__(self, k)
+
+    def get(self, k, default=None):
+        if k in self.SECRET:
+            return self[k]
+        return dict.get(self, k, default)
+
+    def __setitem__(self, k, v):
+        if k in self.SECRET:
+            from . import keys
+            keys.save(k, v)
+            v = DEFAULTS[k]
+        dict.__setitem__(self, k, v)
 
     def save(self):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
@@ -65,6 +96,10 @@ class Settings(dict):
     def set(self, k, v):
         self[k] = v
         self.save()
+
+    def update(self, other=(), **kw):
+        for k, v in dict(other, **kw).items():
+            dict.__setitem__(self, k, v)
 
 
 class Playback:
@@ -95,6 +130,11 @@ class Playback:
         self.muted_from = None
         self.sleep_at = None
         self.sleep_end_of_item = False
+        self.shared_headers = None     # the passcode header for a shared library's songs (C8-27)
+        self._peeked = None            # (item, queue state after it, songs skipped) handed out ahead
+        self._fails = 0                # songs in a row that couldn't be played (C8-14)
+        self._retries = 0              # reconnects to a station that dropped out (C8-29)
+        self._played_at = 0.0
         GLib.timeout_add_seconds(5, self._save_position)
 
     def listen(self, fn):
@@ -111,8 +151,8 @@ class Playback:
     # ---------------------------------------------------------------- items
     def song_item(self, tid):
         r = self.lib.track(tid)
-        if r is None:
-            return None
+        if r is None or not r["path"] or not os.path.exists(r["path"]):
+            return None             # deleted from the library, or its file has gone (C8-06, C8-14)
         start = r["start_time"] or 0
         if r["remember_position"] and (r["position"] or 0) > 5 and (r["position"] or 0) < (r["duration"] or 0) - 5:
             start = r["position"]       # C3-13: carry on where it was left
@@ -137,9 +177,12 @@ class Playback:
         t = (self.shared or [])[i] if 0 <= i < len(self.shared or []) else None
         if t is None:
             return None
-        return {"kind": "song", "id": t["id"], "uri": t["path"], "title": t["title"], "artist": t["artist"],
-                "album": t["album"], "duration": t["duration"], "rg": None, "start": 0, "stop": 0,
-                "volume_adjust": 0, "path": t["path"], "eq": "", "shared": True}
+        it = {"kind": "song", "id": t["id"], "uri": t["path"], "title": t["title"], "artist": t["artist"],
+              "album": t["album"], "duration": t["duration"], "rg": None, "start": 0, "stop": 0,
+              "volume_adjust": 0, "path": t["path"], "eq": "", "shared": True}
+        if self.shared_headers:
+            it["headers"] = dict(self.shared_headers)
+        return it
 
     def station_item(self, st):
         return {"kind": "station", "id": st["uuid"], "uri": st["url"], "title": st["name"], "artist": "",
@@ -155,10 +198,17 @@ class Playback:
         first = ids[index]
         ids = [t for t in ids if chk.get(t, 1) or t == first]
         self.queue.start(ids, ids.index(first))
-        self._start(self.song_item(first))
+        item = self.song_item(first)
+        if item is None:
+            self._note_skipped([first])
+            item = self._walk(True)
+            if item is None:
+                return self._nothing_playable()
+        self._start(item)
 
-    def play_shared(self, tracks, index=0):
+    def play_shared(self, tracks, index=0, headers=None):
         """Play from a shared library: the songs showing, in the order they show."""
+        self.shared_headers = headers
         self.shared = list(tracks)
         if not self.shared:
             return
@@ -202,13 +252,64 @@ class Playback:
             return self.shared_item(key[1])
         return self.song_item(key)
 
+    def _walk(self, user):
+        """Move the queue on to the next song that can be played and return it (None at the end):
+        songs deleted from the library or whose files have gone are passed over (C8-06, C8-14)."""
+        q = self.queue
+        skipped = []
+        for _ in range(len(q.order) + len(q.up_next) + 2):
+            k = q.advance(user=user)
+            if k is None:
+                break
+            it = self._item_for(k)
+            if it is not None:
+                self._walk_skipped = skipped
+                return it
+            skipped.append(k)
+            user = True             # repeat one doesn't stay on a song that can't be played
+        self._walk_skipped = skipped
+        return None
+
     def _next_item(self):
-        k = self.queue.advance()
-        return self._item_for(k) if k is not None else None
+        """The song after this one, handed to the player ahead of time (for gapless playback).
+        The queue itself moves on only when that song really starts (C8-13)."""
+        q = self.queue
+        before = q.snapshot()
+        it = self._walk(False)
+        after = q.snapshot()
+        q.restore(before)
+        self._peeked = (it, after, list(getattr(self, "_walk_skipped", []))) if it is not None else None
+        if it is None and getattr(self, "_walk_skipped", None):
+            GLib.idle_add(lambda s=list(self._walk_skipped): (self._note_skipped(s, everything=True), False)[1])
+        return it
+
+    def _note_skipped(self, keys, everything=False):
+        names = []
+        for k in keys:
+            r = self.lib.track(k) if not isinstance(k, tuple) else None
+            if r is not None:
+                names.append(r["title"] or os.path.basename(r["path"] or ""))
+        if not names:
+            return
+        if everything and len(names) > 1:
+            self._emit("error", "None of the next %d songs could be found. Is the drive they're on connected?" % len(names))
+        elif len(names) == 1:
+            self._emit("error", "“%s” couldn't be found, so it was skipped." % names[0])
+        else:
+            self._emit("error", "%d songs couldn't be found, so they were skipped." % len(names))
+
+    def _nothing_playable(self):
+        self.engine.stop()
+        self.now = None
+        self._emit("track", None)
+        self._emit("error", "None of these songs could be found. Is the drive they're on connected?")
 
     def _start(self, item):
         if item is None:
             return
+        self._peeked = None
+        if item.get("kind") != "station" or item is not self.now:
+            self._retries = 0
         self.stream_title = ""
         self.engine.rate = self.rate_for(item)
         self.engine.play(item, self._next_item)
@@ -278,21 +379,31 @@ class Playback:
             pos = self.engine.position()
             if 2 <= pos <= 20:
                 self.lib.skipped(self.now["id"])
-        k = self.queue.advance(user=True)
-        if k is None:
+        item = self._walk(True)
+        if self._walk_skipped:
+            self._note_skipped(self._walk_skipped, everything=item is None)
+        if item is None:
             self.engine.stop()
             self.now = None
             self._emit("track", None)
             return
-        self._start(self._item_for(k))
+        self._start(item)
 
     def previous(self):
         if self.engine.state != "stopped" and self.engine.position() > 3:
             self.engine.seek(0)
             return
-        k = self.queue.back()
-        if k is not None:
-            self._start(self._item_for(k))
+        q = self.queue
+        for _ in range(len(q.order) + 1):
+            k = q.back()
+            if k is None:
+                return
+            it = self._item_for(k)
+            if it is not None:
+                self._start(it)
+                return
+            if q.pos <= 0:
+                return
 
     def stop(self):
         self._save_position()
@@ -326,9 +437,29 @@ class Playback:
     # ---------------------------------------------------------------- engine events
     def _engine(self, ev, val):
         if ev == "track":
+            pk = self._peeked
+            if pk is not None and val is pk[0]:
+                # the song handed over ahead of time has started: the queue moves on to it now
+                self.queue.restore(pk[1])
+                if pk[2]:
+                    self._note_skipped(pk[2])
+            self._peeked = None
             self.now = val
             self.started_at = time.time()
             self.stream_title = ""
+        elif ev == "state" and val == "playing":
+            self._fails = 0
+            self._played_at = time.time()
+            if (self.now or {}).get("kind") == "station":
+                self.now["_played"] = True
+        elif ev == "ended":
+            # the end of the list: nothing is loaded any more (C8-25)
+            self.now = None
+            self.stream_title = ""
+            self.queue.current = None           # Play then starts from what is selected
+            self._emit("track", None)
+        elif ev == "dropped" and val:
+            return self._station_dropped(val)
         elif ev == "eos" and val:
             if getattr(self, "sleep_end_of_item", False):
                 self.sleep_end_of_item = False
@@ -342,19 +473,90 @@ class Playback:
             if self.now and self.now.get("kind") == "station" and t and t != self.now.get("title"):
                 self.stream_title = t
         elif ev == "error" and val:
-            item, msg = val
-            self._emit("error", "“%s” couldn't be played: %s" % ((item or {}).get("title", ""), msg))
-            if item and item.get("kind") == "song" and self.queue.order:
+            if isinstance(val, str):            # a plain message (a network speaker, C8-34)
+                self._emit("error", val)
+                return
+            item, msg, kind = (tuple(val) + ("",))[:3]
+            item = item or {}
+            title = item.get("title", "")
+            if item.get("kind") == "station":
+                return self._station_error(item, msg, kind)
+            if kind == "missing-plugin":
+                text = "“%s” is in a format this computer can't play yet: a GStreamer part is missing." % title
+            else:
+                text = "“%s” couldn't be played: %s" % (title, msg)
+            self._emit("error", text)
+            if item.get("kind") in ("song", "episode") and self.queue.order:
+                self._fails += 1
+                if self._fails > max(3, len(self.queue.order)):
+                    self._fails = 0
+                    self.engine.stop()
+                    self.now = None
+                    self._emit("track", None)
+                    self._emit("error", "None of the songs in this list could be played, so playback stopped.")
+                    return
                 GLib.timeout_add(300, lambda: (self.next(), False)[1])
             return
         self._emit(ev, val)
 
+    # ---------------------------------------------------------------- stations that fail (C8-29, C8-30, C8-35)
+    def _station_dropped(self, item):
+        """The station stopped sending: try again a few times, waiting longer each time."""
+        if time.time() - self._played_at > 60:
+            self._retries = 0
+        self._retries += 1
+        if self._retries > 5:
+            self._retries = 0
+            self.stream_title = ""
+            self._emit("tags", {})
+            self._emit("error", "“%s” stopped sending. Press Play to try again." % item.get("title", ""))
+            return
+        wait = min(2 ** self._retries, 20)
+        self._emit("busy", "“%s” stopped sending; trying again…" % item.get("title", ""))
+
+        def again():
+            if self.now is item and self.engine.state == "stopped":
+                self.engine.play(item)
+            return False
+        GLib.timeout_add_seconds(wait, again)
+
+    def _station_error(self, item, msg, kind):
+        title = item.get("title", "")
+        if item.get("_played"):
+            return self._station_dropped(item)          # it was playing: a broken connection
+        url = item.get("uri") or ""
+        if kind == "type" and not item.get("_resolved"):
+            # perhaps a station playlist whose address doesn't say so: look inside it (C8-35)
+            from . import net
+
+            def found(real):
+                if real and real != url:
+                    self._start(dict(item, uri=real, _resolved=True))
+                else:
+                    self._emit("error", "“%s” doesn't send a stream Folio Chord can play; the address may be a web page." % title)
+            net.in_thread(lambda: radio.resolve(url, look_inside=True), found,
+                          lambda e: self._emit("error", "“%s” couldn't be played: %s" % (title, net.explain(e))))
+            return
+        if kind == "missing-plugin":
+            if ".m3u8" in url.lower() or "hls" in url.lower():
+                text = ("“%s” is sent as HLS, which needs the package gstreamer1.0-plugins-bad "
+                        "(sudo apt install gstreamer1.0-plugins-bad)." % title)
+            else:
+                text = "“%s” sends a kind of stream this computer can't play yet: a GStreamer part is missing." % title
+        else:
+            text = "“%s” couldn't be played: %s" % (title, msg)
+        self.stream_title = ""
+        self._emit("error", text)
+
     # ---------------------------------------------------------------- C3-18: carry on where you left off
     def session(self):
         q = self.queue
-        enc = lambda k: ["e", k[1]] if isinstance(k, tuple) else k  # noqa: E731
+        enc = lambda k: [k[0], k[1]] if isinstance(k, tuple) else k  # noqa: E731
         n = self.now
         now = None
+        if (n or {}).get("shared"):
+            # a song from another computer's library can't be brought back next time (C8-09)
+            return {"source": [], "order": [], "pos": -1, "up_next": [], "current": None, "now": None, "position": 0.0}
         if n:
             now = {"kind": n["kind"], "id": n["id"]}
             if n["kind"] == "station":
@@ -377,7 +579,7 @@ class Playback:
             d = None
         if not d or not d.get("now"):
             return False
-        dec = lambda k: ("e", k[1]) if isinstance(k, list) else k  # noqa: E731
+        dec = lambda k: (k[0], k[1]) if isinstance(k, list) else k  # noqa: E731
         q = self.queue
         q.source = [dec(k) for k in d.get("source", [])]
         q.order = d.get("order") or list(range(len(q.source)))
@@ -433,7 +635,14 @@ class ChordApp(Gtk.Application):
         fontfix.install()
         self.settings = Settings()
         os.makedirs(data_dir(), exist_ok=True)
-        self.lib = library.Library(os.path.join(data_dir(), "library.db"))
+        # a damaged library file is set aside and the last good copy used (C8-01)
+        self.startup_note = None
+        self.lib_error = None
+        try:
+            self.lib, self.startup_note = library.open_library(os.path.join(data_dir(), "library.db"))
+        except Exception as e:      # noqa: BLE001 — say so rather than staying open with no window
+            self.lib_error = str(e)
+            self.lib = library.Library(":memory:")
         if self.settings["music_folders"] is None:
             music = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_MUSIC) or os.path.expanduser("~/Music")
             self.settings["music_folders"] = [music]
@@ -496,6 +705,14 @@ class ChordApp(Gtk.Application):
             or os.path.expanduser("~/Music")
 
     def do_activate(self):
+        if self.lib_error:
+            d = Gtk.MessageDialog(message_type=Gtk.MessageType.ERROR, buttons=Gtk.ButtonsType.CLOSE,
+                                  text="Folio Chord couldn't open your library")
+            d.format_secondary_text("%s\n\nThe library is kept in %s." % (self.lib_error, data_dir()))
+            d.run()
+            d.destroy()
+            self.quit()
+            return
         if self.win is None:
             from .window import Window
             self.win = Window(self)

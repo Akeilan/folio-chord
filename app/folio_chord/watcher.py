@@ -22,7 +22,13 @@ class Watcher:
     def watch(self, roots):
         for r in roots:
             if os.path.isdir(r):
-                for d, dirs, _files in os.walk(r):
+                seen = set()
+                for d, dirs, _files in os.walk(r, followlinks=True):      # linked folders too (C8-24)
+                    real = os.path.realpath(d)
+                    if real in seen:
+                        dirs[:] = []
+                        continue
+                    seen.add(real)
                     dirs[:] = [x for x in dirs if not x.startswith(".")]
                     self._add(d)
 
@@ -67,13 +73,14 @@ class Watcher:
         pending, gone = self.pending, self.gone
         self.pending, self.gone = set(), set()
         changed = False
+        self.lib.new_ids = set()
         for p in sorted(pending):
             if os.path.isdir(p):
                 self.watch([p])
-                for d, dirs, files in os.walk(p):
-                    for fn in files:
-                        if tags.is_audio(fn) and self.lib.add_file(os.path.join(d, fn), commit=False):
-                            changed = True
+                from .library import walk_audio
+                for f in walk_audio(p):
+                    if self.lib.add_file(f, commit=False):
+                        changed = True
             elif tags.is_audio(p) and os.path.exists(p):
                 if self.lib.add_file(p, commit=False):
                     changed = True
@@ -94,6 +101,7 @@ class Watcher:
         if changed:
             with self.lib.lock:
                 self.lib.db.commit()
+            self.lib.follow_moves(self.lib.new_ids)      # a song renamed or moved keeps what it had (C8-05)
             self.lib.changed()
             if self.on_change:
                 self.on_change()

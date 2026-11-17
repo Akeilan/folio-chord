@@ -57,7 +57,13 @@ def import_library(lib, path):
             cands = [c for c in cands if not secs or abs((c["duration"] or 0) - secs) < 3] or cands
             mine = cands[0]["id"] if cands else None
         if mine is None and tail:
-            mine = by_tail.get(tuple(tail[-1:]))
+            # by the file name alone only when the song's details don't say it is another song (C8-08)
+            cand = by_tail.get(tuple(tail[-1:]))
+            r = lib.track(cand) if cand else None
+            if r is not None:
+                same = lambda a, b: not _norm(a) or not _norm(b) or _norm(a) == _norm(b)  # noqa: E731
+                if same(t.get("Name"), r["title"]) and same(t.get("Artist"), r["artist"]) and same(t.get("Album"), r["album"]):
+                    mine = cand
         if mine is None:
             unmatched.append(t.get("Name") or tail[-1:] and tail[-1] or "?")
             continue

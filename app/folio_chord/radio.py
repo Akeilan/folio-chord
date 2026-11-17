@@ -151,34 +151,48 @@ def looks_like_playlist(url):
     return path.endswith((".pls", ".m3u", ".asx", ".xspf"))
 
 
-def parse_playlist(text):
+def parse_playlist(text, base=None):
     """The stream addresses in a .pls, .m3u, .asx or .xspf file, in order. An HLS playlist (.m3u8
-    with #EXT-X- lines) is a stream itself: nothing is returned for it."""
+    with #EXT-X- lines) is a stream itself: nothing is returned for it. Relative entries are taken
+    against base (the playlist's own address). A web page gives nothing (C8-35)."""
     import re
+    from urllib.parse import urljoin
     if "#EXT-X-" in text:
         return []
+    low = text.lower()
     urls = []
     if re.search(r"(?im)^\[playlist\]", text):
         pairs = sorted((int(n), u.strip()) for n, u in re.findall(r"(?im)^File(\d+)\s*=\s*(\S+)", text))
         urls = [u for _n, u in pairs]
-    elif "<asx" in text.lower():
-        urls = re.findall(r'(?i)<ref\s+href\s*=\s*"([^"]+)"', text)
-    elif "<playlist" in text.lower() and "xspf" in text.lower():
+    elif "<asx" in low:
+        urls = re.findall(r"""(?i)<ref\s+href\s*=\s*["']([^"']+)["']""", text)
+    elif "<playlist" in low and "xspf" in low:
         urls = re.findall(r"(?i)<location>\s*([^<\s]+)\s*</location>", text)
+    elif "<html" in low or "<!doctype" in low:
+        return []
     else:
-        urls = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
-    return [u for u in urls if "://" in u]
+        urls = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+        if base:
+            urls = [urljoin(base, u) for u in urls]
+    return [u for u in urls if re.match(r"(?i)^(https?|mms|rtsp|rtmp|icy)://", u)]
 
 
-def resolve(url):
-    """The address to play for url: the first stream in a station playlist, else url itself."""
+def resolve(url, look_inside=False):
+    """The address to play for url: the first stream in a station playlist, else url itself.
+    look_inside: read the start of it even when the address doesn't end in .pls or .m3u."""
+    import urllib.request
     from . import net
     if not url.lower().startswith(("http://", "https://")):
         return url
-    if not looks_like_playlist(url):
+    if not looks_like_playlist(url) and not look_inside:
         return url
-    data = net.get(url, timeout=15)[:200000].decode("utf-8", "replace")
-    got = parse_playlist(data)
+    req = urllib.request.Request(url, headers={"User-Agent": net.AGENT})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if look_inside and ctype.startswith("audio/") and ctype not in PLAYLIST_TYPES:
+            return url              # a stream after all
+        data = r.read(64 * 1024).decode("utf-8", "replace")
+    got = parse_playlist(data, base=url)
     return got[0] if got else url
 
 

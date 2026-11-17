@@ -536,6 +536,34 @@ FIELDS_UI = [(label, col, kind) for label, col, kind in library.FIELDS]
 FIELDS_UI.insert([c for _l, c, _k in FIELDS_UI].index("play_count") + 1, ("Playlist", "playlist", "playlist"))
 
 
+# numbers a rule shows in a person's units rather than the library's (C8-16)
+NUM_UNIT = {"duration": "m:ss", "size": "MB", "bitrate": "kbps", "sample_rate": "Hz"}
+
+
+def parse_rule_number(col, text):
+    """What was typed in a rule, in the library's units; ValueError when it isn't a number."""
+    t = (text or "").strip().replace(",", ".")
+    if not t:
+        raise ValueError("empty")
+    if col == "duration":
+        v = 0.0
+        for part in t.split(":"):
+            v = v * 60 + float(part)
+        return v
+    if col == "size":
+        return float(t) * 1e6
+    return float(t)
+
+
+def show_rule_number(col, v):
+    v = float(v or 0)
+    if col == "duration":
+        return views.fmt_time(v)
+    if col == "size":
+        return "%g" % round(v / 1e6, 2)
+    return "%g" % v
+
+
 class RuleGroup:
     """A group of Smart Playlist rules; a rule's “…” button adds a nested group (C3-22)."""
 
@@ -601,6 +629,10 @@ class RuleGroup:
         op = Gtk.ComboBoxText()
         v1 = Gtk.Entry(width_chars=16)
         v2 = Gtk.Entry(width_chars=8)
+        unit_lab = Gtk.Label()
+        unit_lab.get_style_context().add_class("chord-dim")
+        unit_lab2 = Gtk.Label()
+        unit_lab2.get_style_context().add_class("chord-dim")
         unit = Gtk.ComboBoxText()
         for u in ("days", "weeks", "months"):
             unit.append(u, u)
@@ -616,7 +648,7 @@ class RuleGroup:
         nest.set_tooltip_text("Add a group of rules (any or all of them)")
         rm = Gtk.Button(label="−")
         rec = {"type": "rule", "row": row, "field": field, "op": op, "v1": v1, "v2": v2, "unit": unit, "rating": rating,
-               "playlist": plist}
+               "playlist": plist, "unit_label": unit_lab}
 
         def kind():
             col = field.get_active_id()
@@ -637,13 +669,21 @@ class RuleGroup:
             plist.set_visible(k == "playlist")
             v2.set_visible(o == "is in the range" and k in ("number",))
             unit.set_visible(k == "date" and o in ("is in the last", "is not in the last"))
+            u = NUM_UNIT.get(field.get_active_id(), "") if k == "number" else \
+                "YYYY-MM-DD" if k == "date" and o in ("is after", "is before") else ""
+            unit_lab.set_text(u)
+            unit_lab.set_visible(bool(u))
+            unit_lab2.set_text(u)
+            unit_lab2.set_visible(bool(u) and v2.get_visible())
         field.connect("changed", lambda *_: refill_ops())
         op.connect("changed", show)
         add.connect("clicked", lambda *_: self.add_rule(None, rec))
         nest.connect("clicked", lambda *_: self.add_group(None, rec))
         rm.connect("clicked", lambda *_: self.remove(rec))
-        for w in (field, op, v1, rating, plist, v2, unit):
+        for w in (field, op, v1, unit_lab, rating, plist, v2, unit_lab2, unit):
             row.pack_start(w, False, False, 0)
+        for w in (v1, unit_lab, rating, plist, v2, unit_lab2, unit):
+            w.set_no_show_all(True)         # shown only when the field and operator call for them
         row.pack_end(rm, False, False, 0)
         row.pack_end(nest, False, False, 0)
         row.pack_end(add, False, False, 0)
@@ -659,24 +699,28 @@ class RuleGroup:
                 plist.set_active(0)
         elif len(r) > 2:
             v1.set_text("" if r[2] is None else (time.strftime("%Y-%m-%d", time.localtime(r[2]))
-                                                  if k == "date" and r[1] in ("is after", "is before") else str(r[2])))
+                                                  if k == "date" and r[1] in ("is after", "is before") else
+                                                  show_rule_number(r[0], r[2]) if k == "number" and r[2] != "" else str(r[2])))
         if len(r) > 3:
             if k == "date":
                 unit.set_active_id(r[3])
             else:
-                v2.set_text(str(r[3]))
+                v2.set_text(show_rule_number(r[0], r[3]) if k == "number" else str(r[3]))
         if unit.get_active_id() is None:
             unit.set_active_id("days")
         self._place(rec, after)
         show()
         return rec
 
-    def rules(self):
+    def rules(self, errors=None):
+        """The rules as the library keeps them. What can't be read is put in errors (a list) with
+        what it was, rather than counted as 0 (C8-16)."""
+        errors = [] if errors is None else errors
         out = []
         for it in self.items:
             if it["type"] == "group":
                 g = it["group"]
-                out.append({"match": g.match.get_active_id() or "all", "rules": g.rules()})
+                out.append({"match": g.match.get_active_id() or "all", "rules": g.rules(errors)})
                 continue
             rec = it
             col, o = rec["field"].get_active_id(), rec["op"].get_active_id()
@@ -687,25 +731,33 @@ class RuleGroup:
             if k == "text":
                 out.append([col, o, rec["v1"].get_text()])
             elif k == "number":
+                label = library.FIELD[col][0]
+
                 def num(e):
                     try:
-                        return float(e.get_text() or 0)
+                        return parse_rule_number(col, e.get_text())
                     except ValueError:
+                        errors.append("“%s” isn't a %s for %s.%s" % (
+                            e.get_text(), "time (like 3:30)" if col == "duration" else "number", label,
+                            " Size is in MB." if col == "size" else ""))
                         return 0
                 out.append([col, o, num(rec["v1"])] + ([num(rec["v2"])] if o == "is in the range" else []))
             elif k == "rating":
                 out.append([col, o, int(rec["rating"].get_active_id() or 0)])
             elif k == "date":
+                label = library.FIELD[col][0]
                 if o in ("is in the last", "is not in the last"):
                     try:
-                        n = float(rec["v1"].get_text() or 0)
+                        n = float(rec["v1"].get_text().strip().replace(",", "."))
                     except ValueError:
+                        errors.append("“%s” isn't a number of %s for %s." % (rec["v1"].get_text(), rec["unit"].get_active_id() or "days", label))
                         n = 0
                     out.append([col, o, n, rec["unit"].get_active_id() or "days"])
                 else:
                     try:
                         t = time.mktime(time.strptime(rec["v1"].get_text().strip(), "%Y-%m-%d"))
                     except ValueError:
+                        errors.append("“%s” isn't a date for %s; write it as YYYY-MM-DD (2026-03-31)." % (rec["v1"].get_text(), label))
                         t = 0
                     out.append([col, o, t])
             else:
@@ -775,6 +827,11 @@ class SmartDialog(Dialog):
     def remove_rule(self, rec):
         self.top.remove(rec)
 
+    def problems(self):
+        errors = []
+        self.top.rules(errors)
+        return errors
+
     def spec(self):
         rules = self.top.rules()
         out = {"name": self.name.get_text().strip() or "untitled playlist", "match": self.match.get_active_id(),
@@ -783,6 +840,9 @@ class SmartDialog(Dialog):
         if self.use_limit.get_active():
             out["limit"] = [self.limit_n.get_value_as_int(), self.limit_unit.get_active_id()]
             out["selected_by"] = self.sel_by.get_active_id()
+            if out["selected_by"] == "random":
+                import random
+                out["seed"] = random.randrange(1, 2 ** 31 - 1)      # a new pick each time the rules are saved
         return out
 
 
@@ -790,6 +850,13 @@ def smart_playlist(win, spec):
     d = SmartDialog(win, spec)
     win.smart_dialog = d
     r = d.ask()
+    while r == Gtk.ResponseType.OK and d.problems():
+        # say what can't be read and keep the window open to put it right (C8-16)
+        message(d, "\n".join(d.problems()), "Smart Playlist")
+        if RESPONSE.get(d.get_title()) is not None:
+            r = None
+            break
+        r = d.run()
     out = d.spec() if r == Gtk.ResponseType.OK else None
     d.destroy()
     return out
@@ -972,6 +1039,12 @@ class OptionsDialog(Dialog):
         s["music_folders"] = new
         for f in old - set(new):
             win.lib.remove_folder(f)
+            # its songs leave the library too, unless another watched folder holds them (C8-23)
+            ids = win.lib.songs_only_in(f, new + [win.app.media_folder()])
+            if ids and choose(win, "Remove the songs in “%s” from your library?" % os.path.basename(f.rstrip("/")),
+                              "%d songs are in that folder. Their files stay where they are." % len(ids),
+                              [("Keep Them", False), ("Remove from Library", True)]):
+                win.lib.remove(ids)
         for f in new:
             win.lib.add_folder(f)
         s["cd_after_import"] = self.cd_after.get_active_id()

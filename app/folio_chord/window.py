@@ -258,10 +258,14 @@ class Window(Gtk.ApplicationWindow):
         self._cd_page()
         box.pack_start(self._bottombar(), False, False, 0)
         self.connect("key-press-event", self._key)
+        # songs, folders and playlists dropped from the file manager anywhere on the window (C8-26)
+        self.drag_dest_set(Gtk.DestDefaults.ALL, [Gtk.TargetEntry.new("text/uri-list", Gtk.TargetFlags.OTHER_APP, 2)],
+                           Gdk.DragAction.COPY)
+        self.connect("drag-data-received", self._files_dropped)
         self.connect("delete-event", self._closing)
         app.playback.listen(self._playback)
         self.lib.listeners.append(self._lib_changed)
-        self._lib_pending = False
+        self._lib_pending = None
         self.scanning = False
         self.fill_sources()
 
@@ -283,6 +287,10 @@ class Window(Gtk.ApplicationWindow):
             GLib.idle_add(lambda: (self.app.playback.restore_session(), False)[1])
         if self.settings.get("look") == "classic":
             GLib.idle_add(lambda: (self.run("look:classic"), False)[1])
+        note = getattr(self.app, "startup_note", None)
+        if note:
+            self.app.startup_note = None
+            GLib.timeout_add(600, lambda: (self.info(note, "Your Library"), False)[1])
         if not os.environ.get("FOLIO_CHORD_NO_SCAN"):
             GLib.timeout_add(400, lambda: (self.rescan(), False)[1])
         GLib.timeout_add_seconds(3, self._check_cd)
@@ -526,6 +534,7 @@ class Window(Gtk.ApplicationWindow):
         tr = Gtk.CellRendererText()
         tr.set_property("ellipsize", Pango.EllipsizeMode.END)
         tr.connect("edited", self._src_renamed)
+        tr.connect("editing-canceled", self._src_edit_ended)
         col.pack_start(tr, True)
         col.set_cell_data_func(tr, self._src_text)
         br = Gtk.CellRendererText()
@@ -538,7 +547,8 @@ class Window(Gtk.ApplicationWindow):
         v.get_selection().connect("changed", self._src_changed)
         v.connect("button-press-event", self._src_press)
         v.connect("key-press-event", self._src_key)
-        t = [Gtk.TargetEntry.new("application/x-chord-tracks", Gtk.TargetFlags.SAME_APP, 1)]
+        t = [Gtk.TargetEntry.new("application/x-chord-tracks", Gtk.TargetFlags.SAME_APP, 1),
+             Gtk.TargetEntry.new("text/uri-list", Gtk.TargetFlags.OTHER_APP, 2)]
         v.enable_model_drag_dest(t, Gdk.DragAction.COPY)
         v.connect("drag-data-received", self._src_drop)
         v.connect("drag-motion", self._src_drag_motion)
@@ -812,7 +822,10 @@ class Window(Gtk.ApplicationWindow):
         if self.source[0] in ("shared", "sharedpl"):
             by = {r["id"]: r for r in self.rows}
             rows = [by[i] for i in ids if i in by]
-            return self.app.playback.play_shared(rows, index)
+            kind, key = self.source
+            i = key if kind == "shared" else self._shared_rows.get(key, (None, None))[0]
+            r = self._remotes.get(i)
+            return self.app.playback.play_shared(rows, index, r.headers() if r else None)
         return self.app.playback.play_songs(ids, index)
 
     def _src_press(self, v, ev):
@@ -842,8 +855,27 @@ class Window(Gtk.ApplicationWindow):
             if it is None:
                 return
             path = model.get_path(it)
+        kind, pid = self.src_store[path][2], self.src_store[path][3]
         self._editing = True
-        self.src_view.set_cursor_on_cell(path, self.src_view.get_column(0), self.src_text, True)
+
+        def start():
+            # after the sources list has been rebuilt for the new playlist, or the edit is lost (C8-21)
+            if self._lib_pending:
+                return True
+            self.fill_sources()
+            found = []
+            self.src_store.foreach(lambda m, pth, it: (found.append(pth.copy()), True)[1]
+                                   if m[it][2] == kind and m[it][3] == pid else False)
+            if not found:
+                self._editing = False
+                return False
+            self._src_quiet = True
+            self.src_view.get_selection().select_path(found[0])
+            self._src_quiet = False
+            self.src_view.grab_focus()
+            self.src_view.set_cursor_on_cell(found[0], self.src_view.get_column(0), self.src_text, True)
+            return False
+        GLib.idle_add(start, priority=GLib.PRIORITY_LOW)
 
     def _src_renamed(self, cell, path, text):
         self._editing = False
@@ -851,6 +883,9 @@ class Window(Gtk.ApplicationWindow):
         if text.strip() and r[6]:
             self.lib.rename_playlist(r[3], text.strip())
             r[1] = text.strip()
+
+    def _src_edit_ended(self, *_a):
+        self._editing = False
 
     def _src_menu(self, ev):
         items = [("New Playlist", "new-playlist"), ("New Smart Playlist…", "new-smart"), ("New Playlist Folder", "new-folder")]
@@ -896,6 +931,12 @@ class Window(Gtk.ApplicationWindow):
 
     def _src_drag_motion(self, v, ctx, x, y, t):
         dest = v.get_dest_row_at_pos(x, y)
+        if Gdk.Atom.intern("text/uri-list", False) in ctx.list_targets():
+            # files from the file manager: onto a playlist, or anywhere for the library
+            if dest and self.src_store[dest[0]][2] == "playlist":
+                v.set_drag_dest_row(dest[0], Gtk.TreeViewDropPosition.INTO_OR_BEFORE)
+            Gdk.drag_status(ctx, Gdk.DragAction.COPY, t)
+            return True
         if dest and self.src_store[dest[0]][2] == "playlist":
             v.set_drag_dest_row(dest[0], Gtk.TreeViewDropPosition.INTO_OR_BEFORE)
             Gdk.drag_status(ctx, Gdk.DragAction.COPY, t)
@@ -907,10 +948,24 @@ class Window(Gtk.ApplicationWindow):
         return True
 
     def _src_drop(self, v, ctx, x, y, data, info, t):
-        ids = [int(i) for i in (data.get_data() or b"").decode().split(",") if i]
         dest = v.get_dest_row_at_pos(x, y)
-        self.drop_on_source(self.src_store[dest[0]] if dest else None, ids)
+        row = self.src_store[dest[0]] if dest else None
+        if info == 2:
+            ids = self.add_paths(paths_of(data))
+            if ids and row is not None and row[2] == "playlist":
+                self.lib.add_to_playlist(row[3], ids)
+            ctx.finish(True, False, t)
+            return
+        ids = [int(i) for i in (data.get_data() or b"").decode().split(",") if i]
+        self.drop_on_source(row, ids)
         ctx.finish(True, False, t)
+
+    def _files_dropped(self, w, ctx, x, y, data, info, t):
+        ids = self.add_paths(paths_of(data))
+        p = self.current_playlist()
+        if ids and p is not None and p["kind"] == "playlist":
+            self.lib.add_to_playlist(p["id"], ids)
+        return ids
 
     def drop_on_source(self, row, ids):
         """Songs dropped on the source list: onto a playlist adds them; elsewhere makes a new one."""
@@ -1317,9 +1372,16 @@ class Window(Gtk.ApplicationWindow):
             self._vol_quiet = False
         elif ev == "modes":
             self._sync_modes()
-        elif ev == "error":
+        elif ev in ("error", "busy"):
             self.lcd.set_busy(val)
-            GLib.timeout_add_seconds(4, lambda: (self.lcd.set_busy(None), False)[1])
+            if getattr(self, "_busy_timer", None):
+                GLib.source_remove(self._busy_timer)
+
+            def clear():
+                self._busy_timer = None
+                self.lcd.set_busy(None)
+                return False
+            self._busy_timer = GLib.timeout_add_seconds(5, clear)
         elif ev == "play-selection":
             self.run("play-selection")
         elif ev == "spectrum" and self.vis:
@@ -1329,23 +1391,52 @@ class Window(Gtk.ApplicationWindow):
         self.art_title.set_text(title)
         self.art_img.set_from_pixbuf(art.for_song(row["path"], 180) or art.placeholder(180, self.dark))
 
-    def _lib_changed(self, what):
-        if self._lib_pending:
-            return
-        self._lib_pending = True
+    def _lib_changed(self, what, ids=None):
+        """Library changes, gathered and handled together once the main loop is free. A rating or a
+        play redraws only its own rows; anything else reloads the list, keeping its place (C8-10, C8-11)."""
+        p = self._lib_pending
+        if not p:
+            p = self._lib_pending = {"what": set(), "ids": set(), "full": False}
+            GLib.idle_add(self._lib_flush)
+        p["what"].add(what)
+        if what in ("tracks", "plays"):
+            if ids is None:
+                p["full"] = True
+            else:
+                p["ids"].update(ids)
+        elif what in ("playlist-items", "playlists"):
+            p["full"] = True
 
-        def later():
-            self._lib_pending = False
-            if what in ("playlists",):
-                self.fill_sources()
-            if what in ("podcasts",):
-                self.fill_sources()
-            if self.source[0] in ("music", "playlist", "smart", "folder") and what in ("tracks", "playlist-items", "playlists", "plays"):
-                sel = self.songs.selected_ids()
-                self.load_songs()
-                self.songs.select_ids(sel, scroll=False)
+    def _lib_flush(self):
+        p, self._lib_pending = self._lib_pending, None
+        if not p:
             return False
-        GLib.idle_add(later)
+        what = p["what"]
+        if what & {"playlists", "podcasts"} and not getattr(self, "_editing", False):
+            self.fill_sources()
+        kind = self.source[0]
+        if kind in ("music", "playlist", "smart", "folder") and what & {"tracks", "playlist-items", "playlists", "plays"}:
+            if p["full"] or kind in ("smart", "folder"):
+                self.reload_songs()
+            else:
+                for tid in p["ids"]:
+                    self.songs.refresh_row(tid)
+                self.update_status()
+        return False
+
+    def reload_songs(self):
+        """load_songs, keeping the selection and the scroll position."""
+        sel = self.songs.selected_ids()
+        adj = self.songs.get_vadjustment()
+        top = adj.get_value()
+        self.load_songs()
+        self.songs.select_ids(sel, scroll=False)
+
+        def back():
+            adj.set_value(min(top, max(0, adj.get_upper() - adj.get_page_size())))
+            return False
+        back()
+        GLib.idle_add(back)
 
     def _key(self, w, ev):
         focus = self.get_focus()
@@ -1388,26 +1479,49 @@ class Window(Gtk.ApplicationWindow):
         def done(res):
             self.scanning = False
             self.lcd.set_busy(None)
-            self.load_songs() if self.source[0] == "music" else None
+            self.reload_songs() if self.source[0] == "music" else None
+            self.report_bad_names()
 
         def fail(e):
             self.scanning = False
             self.lcd.set_busy(None)
+            self.info("Checking your music folders stopped: %s" % e)
         net.in_thread(work, done, fail)
 
-    def add_paths(self, paths, play=False):
+    def report_bad_names(self):
+        bad = list(self.lib.bad_names)
+        if not bad:
+            return None
+        self.lib.bad_names = []
+        shown = "\n".join(os.fsencode(b).decode("utf-8", "replace") for b in bad[:12])
+        self.info("%d file%s couldn't be added because %s name%s characters that aren't valid text "
+                  "(a drive from an older computer, perhaps). Renaming %s in Files and checking again "
+                  "brings %s in:\n\n%s%s"
+                  % (len(bad), "" if len(bad) == 1 else "s", "its" if len(bad) == 1 else "their",
+                     " has" if len(bad) == 1 else "s have", "it" if len(bad) == 1 else "them",
+                     "it" if len(bad) == 1 else "them", shown, "\n…" if len(bad) > 12 else ""))
+        return bad
+
+    def add_paths(self, paths, play=False, background=False):
+        """Add files and folders to the library; a playlist file (.m3u, .m3u8, .pls) comes in as a
+        playlist (C8-26). background: folders are looked through off the main loop, so the
+        window keeps answering (C8-10); the ids of the files are returned either way."""
+        from .library import walk_audio
         ids = []
+        folders_to_scan = []
         for p in paths:
             if os.path.isdir(p):
                 self.lib.add_folder(p)
                 folders = self.settings["music_folders"] or []
                 if p not in folders:
                     self.settings.set("music_folders", folders + [p])
-                for d, _dirs, files in os.walk(p):
-                    for f in sorted(files):
-                        tid = self.lib.add_file(os.path.join(d, f))
-                        if tid:
-                            ids.append(tid)
+                folders_to_scan.append(p)
+            elif p.lower().endswith((".m3u", ".m3u8", ".pls")):
+                pid = self.lib.import_m3u(p)
+                self.fill_sources()
+                self.select_source("playlist", pid)
+                ids += [r["id"] for r in self.lib.playlist_tracks(pid)]
+                self.report_import_missing(p)
             else:
                 if self.settings.get("copy_to_media") and tags_is_audio(p) and not self._inside_roots(p):
                     from . import organize, tags
@@ -1418,10 +1532,47 @@ class Window(Gtk.ApplicationWindow):
                 tid = self.lib.add_file(p)
                 if tid:
                     ids.append(tid)
+
+        def scan_folders():
+            got = []
+            self.lib.new_ids = set()
+            for top in folders_to_scan:
+                for f in walk_audio(top):
+                    try:
+                        tid = self.lib.add_file(f, commit=False)
+                    except Exception:       # noqa: BLE001
+                        tid = None
+                    if tid:
+                        got.append(tid)
+            with self.lib.lock:
+                self.lib.db.commit()
+            self.lib.follow_moves(self.lib.new_ids)
+            return got
+        if folders_to_scan and background:
+            self.lcd.set_busy("Adding your music…")
+            from . import net
+
+            def done(got):
+                self.lcd.set_busy(None)
+                self.lib.changed()
+                self.report_bad_names()
+                if play and got:
+                    self.app.playback.play_songs(got, 0)
+            net.in_thread(scan_folders, done, lambda e: (self.lcd.set_busy(None), self.info("Adding the folder stopped: %s" % e)))
+        elif folders_to_scan:
+            ids += scan_folders()
+            self.report_bad_names()
         self.lib.changed()
         if play and ids:
             self.app.playback.play_songs(ids, 0)
         return ids
+
+    def report_import_missing(self, path):
+        miss = list(getattr(self.lib, "import_missing", []) or [])
+        if miss:
+            self.info("%d of the entries in “%s” couldn't be found in your library or on this computer:\n\n%s%s"
+                      % (len(miss), os.path.basename(path), "\n".join(miss[:12]), "\n…" if len(miss) > 12 else ""))
+        return miss
 
     def _inside_roots(self, p):
         p = os.path.abspath(p)
@@ -1543,26 +1694,25 @@ class Window(Gtk.ApplicationWindow):
         from . import dialogs
         files = dialogs.choose_files(self, "Add to Library", audio=True)
         if files:
-            return self.add_paths(files)
+            return self.add_paths(files, background=True)
 
     def act_add_folder(self):
         from . import dialogs
         d = dialogs.choose_folder(self, "Add Folder to Library")
         if d:
-            ids = self.add_paths([d])
-            self.load_songs()
-            return ids
+            return self.add_paths([d], background=True)
 
     def act_rescan(self):
         self.rescan()
 
     def act_import_playlist(self):
         from . import dialogs
-        f = dialogs.choose_files(self, "Import Playlist", patterns=[("Playlists", ["*.m3u", "*.m3u8"])], multiple=False)
+        f = dialogs.choose_files(self, "Import Playlist", patterns=[("Playlists", ["*.m3u", "*.m3u8", "*.pls"])], multiple=False)
         if f:
             pid = self.lib.import_m3u(f[0])
             self.fill_sources()
             self.select_source("playlist", pid)
+            self.report_import_missing(f[0])
             return pid
 
     def act_export_playlist(self):
@@ -2033,6 +2183,8 @@ class Window(Gtk.ApplicationWindow):
         rows = list(self.lib.tracks()) if rows is None else list(rows)
         groups = {}
         for r in rows:
+            if how != "exact" and not (r["artist"] or "").strip():
+                continue        # a song with no artist (an untagged rip) is never a duplicate by name (C8-04)
             k = ((r["title"] or "").strip().lower(), (r["artist"] or "").strip().lower())
             if how == "exact":
                 k += ((r["album"] or "").strip().lower(), int(round((r["duration"] or 0) / 2.0)))
@@ -2059,7 +2211,7 @@ class Window(Gtk.ApplicationWindow):
                 self, "Remove duplicate songs?",
                 "Same name and artist: %d extra file%s.\nExact duplicates (same album and length too): %d."
                 % (len(extra(by_name)), "" if len(extra(by_name)) == 1 else "s", len(extra(by_exact))),
-                [("Cancel", None), ("Exact Duplicates", "exact"), ("Same Name and Artist", "name")])
+                [("Cancel", None), ("Same Name and Artist", "name"), ("Exact Duplicates", "exact")])
             if how is None:
                 return None
         groups = by_exact if how == "exact" else by_name
@@ -2070,26 +2222,26 @@ class Window(Gtk.ApplicationWindow):
         names = "\n".join("%s — %s" % (r["title"] or os.path.basename(r["path"]), r["artist"] or "")
                           for r in gone[:20])
         if not dialogs.confirm(
-                self, "Delete %d duplicate file%s?" % (len(gone), "" if len(gone) == 1 else "s"),
+                self, "Move %d duplicate file%s to the Trash?" % (len(gone), "" if len(gone) == 1 else "s"),
                 "One copy of each of these %d songs is kept: the one with a rating, else the one played "
-                "most, else the largest file. The other files are deleted from the computer rather than "
-                "moved to the Trash, so this can't be undone.\n\n%s%s"
-                % (len(groups), names, "\n…" if len(gone) > 20 else ""), ok="Delete Files"):
+                "most, else the largest file. The others go to the Trash, where they can be restored.\n\n%s%s"
+                % (len(groups), names, "\n…" if len(gone) > 20 else ""), ok="Move to Trash"):
             return None
+        from gi.repository import Gio
         done, failed = [], []
         for r in gone:
             try:
-                os.remove(r["path"])
-            except OSError as e:
+                Gio.File.new_for_path(r["path"]).trash(None)
+            except GLib.Error as e:
                 if os.path.exists(r["path"]):
-                    failed.append("%s (%s)" % (r["path"], e.strerror or e))
+                    failed.append("%s (%s)" % (r["path"], e.message))
                     continue
             done.append(r["id"])
         if done:
             self.lib.remove(done)
             self.load_songs()
         if failed:
-            self.info("%d file%s deleted. %d couldn't be:\n%s"
+            self.info("%d file%s moved to the Trash. %d couldn't be (a drive without a Trash, perhaps), so they were left where they are:\n%s"
                       % (len(done), "" if len(done) == 1 else "s", len(failed), "\n".join(failed[:20])))
         return len(done)
 
@@ -2343,3 +2495,16 @@ class Window(Gtk.ApplicationWindow):
     def act_about(self):
         from . import dialogs
         return dialogs.about(self, VERSION)
+
+
+def paths_of(data):
+    """The local files in a drop from the file manager (text/uri-list)."""
+    out = []
+    for u in data.get_uris() or []:
+        try:
+            p, _host = GLib.filename_from_uri(u)
+        except GLib.Error:
+            continue
+        if p:
+            out.append(p)
+    return out

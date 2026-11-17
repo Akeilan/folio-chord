@@ -113,7 +113,7 @@ class RadioView(Gtk.Paned):
 
             def fail(e):
                 self._loaded_lists = False
-                self.hint.set_text("The radio directory couldn't be reached: %s" % e)
+                self.hint.set_text("The radio directory couldn't be reached: %s." % net.explain(e))
             net.in_thread(work, done, fail)
         model, it = self.cat_view.get_selection().get_selected()
         if it is None:
@@ -159,7 +159,7 @@ class RadioView(Gtk.Paned):
 
         def fail(e):
             if seq == self._seq:
-                self.hint.set_text("The radio directory couldn't be reached: %s" % e)
+                self.hint.set_text("The radio directory couldn't be reached: %s." % net.explain(e))
         net.in_thread(fn, done, fail)
 
     def set_stations(self, stations):

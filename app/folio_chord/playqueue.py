@@ -59,11 +59,30 @@ class PlayQueue:
                     idx.insert(0, first)
         self.order = idx
 
+    # ---------------------------------------------------------------- state (C8-13, C8-14)
+    def snapshot(self):
+        """Everything advance() changes, to look ahead and then put back."""
+        return (list(self.order), self.pos, list(self.up_next), self.current, len(self.history), self.rng.getstate())
+
+    def restore(self, snap):
+        order, self.pos, up_next, self.current, nh, rs = snap
+        self.order, self.up_next = list(order), list(up_next)
+        del self.history[nh:]
+        self.rng.setstate(rs)
+
+    def list_index(self):
+        """Where in source the list has got to: the song playing, or (while an Up Next song plays)
+        the list song it came after."""
+        if 0 <= self.pos < len(self.order):
+            return self.order[self.pos]
+        return self.source.index(self.current) if self.current in self.source else None
+
     def set_shuffle(self, on, by=None):
         self.shuffle = bool(on)
         if by:
             self.shuffle_by = by
-        cur = self.source.index(self.current) if self.current in self.source else None
+        # an Up Next song playing isn't in the list: keep the place the list had got to (C8-20)
+        cur = self.source.index(self.current) if self.current in self.source else self.list_index()
         self._make_order(first=cur)
         self.pos = self.order.index(cur) if cur is not None and cur in self.order else -1
 
@@ -100,6 +119,17 @@ class PlayQueue:
 
     def clear_up_next(self):
         self.up_next = []
+
+    def remove_up_next(self, i):
+        """Take the song at this place out of Up Next (C8-42)."""
+        if 0 <= i < len(self.up_next):
+            del self.up_next[i]
+
+    def move_up_next(self, i, j):
+        """Move the Up Next song at place i to place j."""
+        if 0 <= i < len(self.up_next):
+            k = self.up_next.pop(i)
+            self.up_next.insert(max(0, min(j, len(self.up_next))), k)
 
     def upcoming(self, n=50):
         """The next songs, Up Next first, without moving on."""
@@ -148,6 +178,10 @@ class PlayQueue:
 
     def back(self):
         if not self.order:
+            return self.current
+        if 0 <= self.pos < len(self.order) and self.current != self.source[self.order[self.pos]]:
+            # an Up Next song is playing: back is the list song it came after (C8-20)
+            self.current = self.source[self.order[self.pos]]
             return self.current
         if self.pos > 0:
             self.pos -= 1

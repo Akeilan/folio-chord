@@ -192,14 +192,14 @@ def main():
     answer("Choose", Gtk.ResponseType.CANCEL)
     check(w.run("remove-duplicates") is None, "Remove Duplicate Items can be cancelled")
     check(all(os.path.exists(c) for c in copies), "and nothing is deleted when it is")
-    answer("Choose", lambda d: 3)                   # Same Name and Artist
+    answer("Choose", lambda d: 3)                   # Exact Duplicates (the default since C8-04)
     answer("Confirm", Gtk.ResponseType.CANCEL)
     check(w.run("remove-duplicates") is None, "the delete warning can be cancelled too")
     check(all(os.path.exists(c) for c in copies), "and still nothing is deleted")
     answer("Confirm", Gtk.ResponseType.OK)
     n = w.run("remove-duplicates")
     pump(0.3)
-    check(n == 3, "Remove Duplicate Items deletes the extra files", n)
+    check(n == 3, "Remove Duplicate Items moves the extra files to the Trash", n)
     check(not any(os.path.exists(c) for c in copies) and os.path.exists(kept_path),
           "the extra files are gone and the copy worth keeping is still there")
     left = [g for g in w.duplicate_groups("name") if (g[0]["title"] or "") == "Blue Train"]
